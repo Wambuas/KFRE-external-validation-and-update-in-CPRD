@@ -1,0 +1,381 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+rm(list = ls())
+
+library(tidyverse)
+library(riskRegression)
+library(plyr)
+#library(tidysurv)
+library(data.table)
+library(stringr)
+library(parallel)
+library(tableone)
+library(muhaz)
+library(survival)
+library(Hmisc)
+library(MASS)
+library(mfp)
+library(reshape2)
+library(flexsurv)
+library(devtools)
+library(prodlim)
+library(rms)
+library(rstpm2)
+library(survcomp)
+library(glmnet)
+library(caret)
+library(sjPlot)
+library(knitr)
+library(webshot)
+library(pROC)
+library(rmda)
+library(pseudo)
+library(lava)
+library(pec)
+library(mice)
+library(miceadds)
+```
+
+# Imputing ACR with Outcome
+
+## Data
+
+```{r}
+ckd_data=readRDS("eligible_cohort.rds")
+names(ckd_data)
+
+```
+
+
+
+
+### 1. Convert PCR to ACR
+
+```{r}
+# The urine protein:creatinine ratio (uPCR) units of mg/mmol need to be 
+# converted to mg/g by multiplying values by 8.84 to apply the conversion equation
+
+ckd_data$PCR_value = ifelse(ckd_data$measure=="PCR",ckd_data$ACR_value,NA)
+x = ckd_data %>% dplyr::select(ACR_value,PCR_value)
+
+```
+
+
+```{r}
+tapply(ckd_data$ACR_value, ckd_data$measure, summary)
+```
+
+
+```{r}
+k=subset(ckd_data,ckd_data$measure=="PCR")
+
+x = k %>% dplyr::select(PRACTICE_PATIENT_ID,ACR_value,PCR_value,SEX,Diabetes,hypertension,measure)
+
+x = x %>% dplyr::mutate(
+  
+  female = ifelse(SEX=="F",1,0),
+  diabetic = ifelse(Diabetes==1,1,0),
+  hypertensive = ifelse(hypertension==1,1,0),
+  
+  PCR_value1 = PCR_value*8.84 #convert to mg/g
+                                      
+      
+
+
+)
+
+
+x$PCR_value2 = 
+      exp(5.2659 + (0.2934*log(pmin(x$PCR_value1/50,1)))+
+      1.5643*log(max(pmin(x$PCR_value1/500,1),0.1))+
+      1.1109*log(pmax(x$PCR_value1/500,1))-
+      0.0773*(x$female)+
+      0.0797*(x$diabetic)+
+       0.1265*(x$hypertensive))
+
+x$PCR_value3 = x$PCR_value2/8.84 #convert back to mg/mmol to match ACR unit of measure
+
+
+### https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7780415/
+
+x = x %>% dplyr::select(PRACTICE_PATIENT_ID,PCR_value3)
+
+```
+
+
+```{r}
+ckd_data = left_join(ckd_data,x,by=c("PRACTICE_PATIENT_ID"))
+ckd_data$ACR_value = ifelse(ckd_data$measure=="PCR",ckd_data$PCR_value3,ckd_data$ACR_value)
+
+```
+
+
+```{r}
+tapply(k2$ACR_value, k2$measure, summary)
+```
+
+
+```{r}
+ckd_data = ckd_data %>% dplyr::mutate(
+  
+  female = ifelse(SEX=="F",1,0),
+  diabetic = ifelse(Diabetes==1,1,0),
+  hypertensive = ifelse(hypertension==1,1,0)
+                                      
+)
+
+
+```
+
+
+### 2. Imputation of ACR where PCR was not available
+
+### Select variables I need
+
+```{r}
+
+incomplete_data = ckd_data %>% dplyr::select(PRACTICE_PATIENT_ID,index_date,Age2,female,diabetic,hypertensive,CVD,ACR_value,EGFR2,ethnicity,follow_up,rrt_o,rrt_2yrs,rrt_5yrs)
+
+names(incomplete_data)
+```
+
+```{r}
+colMeans(is.na(incomplete_data))
+```
+
+
+### Additional auxilliary variables for ACR imputation
+
+#### Peripheral Vascular disease
+
+```{r}
+
+peripheral_vasc0 = read.csv("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/All multiple files full data/AVF7_CKD_Model_Data_Aurum_V2_fullDB20240322023157_CPRDAurum_PeripheralVascularDisease.csv")
+
+peripheral_vasc0 = peripheral_vasc0 %>% dplyr::select(PRACTICE_PATIENT_ID,EVENT_DATE)
+#peripheral_vasc$indicator = "peripheral_vasc"
+
+peripheral_vasc1 = read.csv("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/All multiple files full data/AVF7_CKD_Model_Data_Aurum_V2_fullDB20240322023157_PeripheralVascularDisease_CMMS_Aurum.csv")
+
+peripheral_vasc1 = peripheral_vasc1 %>% dplyr::select(PRACTICE_PATIENT_ID,EVENT_DATE)
+
+
+peripheral_vasc2 = read.csv("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/All multiple files full data/AVF7_CKD_Model_Data_Aurum_V2_fullDB20240322023157_eFI_peripheral_vascular_disease.csv")
+
+peripheral_vasc2 = peripheral_vasc2 %>% dplyr::select(PRACTICE_PATIENT_ID,EVENT_DATE)
+
+peripheral_vasc = rbind(peripheral_vasc0,peripheral_vasc1,peripheral_vasc2)
+
+peripheral_vasc = peripheral_vasc %>% 
+  dplyr::rename(patient_id=PRACTICE_PATIENT_ID,event_date = EVENT_DATE) %>% 
+  dplyr::mutate(event_date=as.Date(event_date, format="%Y-%m-%d", origin="1899-12-30")) %>% dplyr::group_by(patient_id) %>% arrange(event_date)
+
+peripheral_vasc$dups = duplicated(peripheral_vasc$patient_id)
+peripheral_vasc = subset(peripheral_vasc,peripheral_vasc$dups==F)
+
+
+peripheral_vasc = peripheral_vasc %>% dplyr::select(patient_id,event_date) %>% dplyr::rename(event_date_peripheral_vasc = event_date)
+peripheral_vasc$patient_id = sub(".*_", "", peripheral_vasc$patient_id)
+peripheral_vasc = data.frame(peripheral_vasc)
+
+
+incomplete_data$patient_id = sub(".*_", "", incomplete_data$PRACTICE_PATIENT_ID)
+
+incomplete_data = left_join(incomplete_data,peripheral_vasc,by=c("patient_id"))
+
+
+incomplete_data$peripheral_vasc = ifelse(!is.na(incomplete_data$event_date_peripheral_vasc) & incomplete_data$event_date_peripheral_vasc<incomplete_data$index_date,1,0)
+
+table(incomplete_data$peripheral_vasc)
+prop.table(table(incomplete_data$peripheral_vasc))
+```
+
+
+#### SLE
+
+```{r}
+
+sle = read.csv("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/All multiple files full data/AVF7_CKD_Model_Data_Aurum_V2_fullDB20240322023157_Systemic_lupus_erythematosus_MM_birm_cam.csv")
+
+sle = sle %>% dplyr::select(PRACTICE_PATIENT_ID,EVENT_DATE)
+
+
+
+sle = sle %>% 
+  dplyr::rename(patient_id=PRACTICE_PATIENT_ID,event_date = EVENT_DATE) %>% 
+  dplyr::mutate(event_date=as.Date(event_date, format="%Y-%m-%d", origin="1899-12-30")) %>% dplyr::group_by(patient_id) %>% arrange(event_date)
+
+sle$dups = duplicated(sle$patient_id)
+sle = subset(sle,sle$dups==F)
+
+
+sle = sle %>% dplyr::select(patient_id,event_date) %>% dplyr::rename(event_date_sle = event_date)
+sle$patient_id = sub(".*_", "", sle$patient_id)
+sle = data.frame(sle)
+
+
+incomplete_data$patient_id = sub(".*_", "", incomplete_data$PRACTICE_PATIENT_ID)
+
+incomplete_data = left_join(incomplete_data,sle,by=c("patient_id"))
+
+
+incomplete_data$sle = ifelse(!is.na(incomplete_data$event_date_sle) & incomplete_data$event_date_sle<incomplete_data$index_date,1,0)
+
+table(incomplete_data$sle)
+prop.table(table(incomplete_data$sle))
+```
+
+
+#### LITHIUM
+
+```{r}
+
+lithium = read.csv("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/All multiple files full data/AVF7_CKD_Model_Data_Aurum_V2_fullDB20240322023157_Lithium_OPTIMAL.csv")
+
+lithium = lithium %>% dplyr::select(PRACTICE_PATIENT_ID,EVENT_DATE)
+
+
+
+lithium = lithium %>% 
+  dplyr::rename(patient_id=PRACTICE_PATIENT_ID,event_date = EVENT_DATE) %>% 
+  dplyr::mutate(event_date=as.Date(event_date, format="%Y-%m-%d", origin="1899-12-30")) %>% dplyr::group_by(patient_id) %>% arrange(event_date)
+
+lithium$dups = duplicated(lithium$patient_id)
+lithium = subset(lithium,lithium$dups==F)
+
+
+lithium = lithium %>% dplyr::select(patient_id,event_date) %>% dplyr::rename(event_date_lithium = event_date)
+lithium$patient_id = sub(".*_", "", lithium$patient_id)
+lithium = data.frame(lithium)
+
+
+incomplete_data$patient_id = sub(".*_", "", incomplete_data$PRACTICE_PATIENT_ID)
+
+incomplete_data = left_join(incomplete_data,lithium,by=c("patient_id"))
+
+
+incomplete_data$lithium = ifelse(!is.na(incomplete_data$event_date_lithium) & incomplete_data$event_date_lithium<incomplete_data$index_date,1,0)
+
+table(incomplete_data$lithium)
+prop.table(table(incomplete_data$lithium))
+```
+
+#### Cerobravascular disease
+
+```{r}
+
+cerobravascular_d = read.csv("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/All multiple files full data/AVF7_CKD_Model_Data_Aurum_V2_fullDB20240322023157_eFI_cerebrovasculardisease.csv")
+
+cerobravascular_d = cerobravascular_d %>% dplyr::select(PRACTICE_PATIENT_ID,EVENT_DATE)
+
+
+
+cerobravascular_d = cerobravascular_d %>% 
+  dplyr::rename(patient_id=PRACTICE_PATIENT_ID,event_date = EVENT_DATE) %>% 
+  dplyr::mutate(event_date=as.Date(event_date, format="%Y-%m-%d", origin="1899-12-30")) %>% dplyr::group_by(patient_id) %>% arrange(event_date)
+
+cerobravascular_d$dups = duplicated(cerobravascular_d$patient_id)
+cerobravascular_d = subset(cerobravascular_d,cerobravascular_d$dups==F)
+
+
+cerobravascular_d = cerobravascular_d %>% dplyr::select(patient_id,event_date) %>% dplyr::rename(event_date_cerobravascular_d = event_date)
+cerobravascular_d$patient_id = sub(".*_", "", cerobravascular_d$patient_id)
+cerobravascular_d = data.frame(cerobravascular_d)
+
+
+incomplete_data$patient_id = sub(".*_", "", incomplete_data$PRACTICE_PATIENT_ID)
+
+incomplete_data = left_join(incomplete_data,cerobravascular_d,by=c("patient_id"))
+
+
+incomplete_data$cerobravascular_d = ifelse(!is.na(incomplete_data$event_date_cerobravascular_d) & incomplete_data$event_date_cerobravascular_d<incomplete_data$index_date,1,0)
+
+table(incomplete_data$cerobravascular_d)
+prop.table(table(incomplete_data$cerobravascular_d))
+
+```
+
+
+### Impute missing ACR using MICE
+
+
+```{r}
+incomplete_data = incomplete_data %>% dplyr::select(PRACTICE_PATIENT_ID,Age2,female,diabetic,hypertensive,CVD,ACR_value,EGFR2,ethnicity,follow_up,rrt_o,peripheral_vasc,sle,lithium,cerobravascular_d,rrt_2yrs,rrt_5yrs)
+
+names(incomplete_data)
+
+```
+
+
+```{r}
+
+library(survival)
+library(mice)
+
+incomplete_data$ACR_value =  incomplete_data$ACR_value
+
+incomplete_data$ACR_value = log(incomplete_data$ACR_value+0.001)
+
+incomplete_data$female = factor(incomplete_data$female)
+incomplete_data$diabetic = factor(incomplete_data$diabetic)
+incomplete_data$hypertensive = factor(incomplete_data$hypertensive)
+incomplete_data$CVD = factor(incomplete_data$CVD)
+incomplete_data$ethnicity = factor(incomplete_data$ethnicity,levels=c("White","Black","South Asian","Mixed race","Others","Missing"))
+incomplete_data$peripheral_vasc = factor(incomplete_data$peripheral_vasc)
+incomplete_data$sle = factor(incomplete_data$sle)
+incomplete_data$lithium = factor(incomplete_data$lithium)
+incomplete_data$cerobravascular_d = factor(incomplete_data$cerobravascular_d)
+
+### To be excluded from imputation model
+exclude_from_imputataion = incomplete_data %>% dplyr::select(PRACTICE_PATIENT_ID,rrt_2yrs,rrt_5yrs)
+
+## Exclude variables i don't need from imputation dataset
+incomplete_data = incomplete_data %>% dplyr::select(-rrt_2yrs,-rrt_5yrs)
+
+```
+
+
+```{r}
+
+# ## White et al. [2011, Section 5] recommend using covariates and the outcome from the analysis models,
+# as well as predictors of the incomplete variable. Further, White and Royston [2009] recommend
+# using the
+# • the Nelson-Aalen estimate of the cumulative hazard (computed using nelsonaalen()), and
+# • the event indicator (for example, died as a 0/1 variable).
+
+incomplete_data$nelsonaalen <- nelsonaalen(incomplete_data, follow_up, rrt_o)
+#imp.surv <- mice(incomplete_data, m = 5, print = FALSE)
+
+m0 <- mice(incomplete_data, maxit=20)
+
+```
+
+
+```{r}
+meth <- m0$method
+meth[names(meth) %in% c("PRACTICE_PATIENT_ID")] <- ""
+pred <- m0$predictorMatrix
+
+pred["ACR_value", "PRACTICE_PATIENT_ID"] <- 0 #exclude patient id from ACR imputataion
+pred["ACR_value", "follow_up"] <- 0 #exclude time from ACR imputataion
+
+imp.surv <- mice(incomplete_data, predictorMatrix=pred, method=meth,m = 1,maxit=20, print = FALSE)
+
+save(imp.surv, file = "imputed_data.rda")
+
+
+```
+
+
+### Check imputation - density plot and summary stats between imputed vs observed
+
+```{r}
+densityplot(imp.surv)
+```
+
