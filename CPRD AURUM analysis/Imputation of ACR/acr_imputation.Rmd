@@ -354,6 +354,7 @@ incomplete_data$nelsonaalen <- nelsonaalen(incomplete_data, follow_up, rrt_o)
 
 m0 <- mice(incomplete_data, maxit=20)
 
+
 ```
 
 
