@@ -1,0 +1,998 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+
+rm(list=ls())
+
+if (!require("pacman")) install.packages("pacman")
+library(pacman)
+
+library(riskRegression)
+
+pacman::p_load(
+  survival,
+  rms,
+  cmprsk,
+  mstate,
+  pseudo,
+  pec,
+  plotrix,
+  knitr,
+  splines,
+  kableExtra,
+  gtsummary,
+  boot,
+  tidyverse,
+  rsample,
+  gridExtra,
+  webshot
+)
+
+library(readstata13)
+
+
+options(bitmapType='cairo')
+
+start_time00 = Sys.time()
+
+```
+
+# IMPUTED
+
+## 1. Benchmark model
+
+```{r}
+benchmark = readstata13::read.dta13("IMPUTED_data_with__Benchmark_scores.dta")
+
+benchmark = benchmark %>% dplyr::select(
+  patient_id,
+  time1,status1,
+  LP,
+  score_2yrs_Benchmark,
+  score_5yrs_Benchmark
+  
+  ) 
+
+```
+
+##### 2 years
+
+```{r}
+
+start_time = Sys.time()
+
+# Calibration plot (pseudo-obs approach) ----------------------------------
+# First compute riskRegression::Score()
+
+vdata <- x %>% 
+  dplyr::select(patient_id, score_2yrs_Benchmark, time1,status1) 
+
+names(vdata)=c("ID","score","time","status")
+
+primary_event <- 1
+
+# Add estimated risk and complementary log-log of it to dataset
+vdata$pred <- vdata$score
+horizon <- 2
+pred <- as.matrix(vdata$pred)
+
+
+score_vdata <- riskRegression::Score(
+  list("KFRE_validation" = pred),
+  formula = Hist(time, status) ~ 1,
+  cens.model = "km",
+  data = vdata,
+  conf.int = TRUE,
+  times = horizon,
+  #  metrics = c("auc", "brier"),
+  summary = c("ipa"),
+  cause = primary_event,
+  plots = "calibration"
+)
+
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+pseudos <- pseudos[order(pseudos$risk), ]
+
+library(parallel)
+pseudos = list(pseudos)
+smooth_pseudos = mclapply(pseudos, function(x){
+  smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = x,  span=0.33, degree = 1), se = F)
+},mc.cores = 69)
+# Use linear loess (weighted local regression with polynomial span=0.25, degree = 1) smoothing
+#smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = pseudos,span = 0.25, span=0.25, degree = 1), se = F)
+
+smooth_pseudos1 = data.frame(smooth_pseudos[[1]])
+names(smooth_pseudos1)=c("smooth_pseudos")
+pseudos = pseudos[[1]]
+
+pseudo_vals_overall <- data.frame(
+  obs = smooth_pseudos1$smooth_pseudos, 
+  risk = pseudos$risk,
+  Category = "Overall")
+
+Sys.time()-start_time
+
+```
+
+
+###### Plot
+
+```{r}
+pdf("PseudoCal_2yearBenchmarkIMPUTED.pdf")
+
+pseudo_vals_overall %>%
+  ggplot(aes(x = risk, y = obs)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2) +
+  geom_line() +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions") -> p1
+
+
+print(p1)
+dev.off()
+
+two_year_cal_data = pseudo_vals_overall
+
+```
+
+
+###### Intercept and slope
+
+```{r}
+
+## Calibration intercept and slope --------------------------------------
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+
+# Note:
+# - 'pseudos' is the data.frame with ACTUAL pseudo-observations, not the smoothed ones
+# - Column ID is not the id in vdata; it is just a number assigned to each row of
+# the original validation data sorted by time and event indicator
+pseudos$cll_pred <- log(-log(1 - pseudos$risk)) # add the cloglog risk ests
+
+# Fit model for calibration intercept
+fit_cal_int <- geese(
+  pseudovalue ~ offset(cll_pred),
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Fit model for calibration slope
+fit_cal_slope <- geese(
+  pseudovalue ~ offset(cll_pred) + cll_pred,
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Perform joint test on intercept and slope
+betas <- fit_cal_slope$beta
+vcov_mat <- fit_cal_slope$vbeta
+wald <- drop(betas %*% solve(vcov_mat) %*% betas)
+# pchisq(wald, df = 2, lower.tail = FALSE)
+```
+
+
+
+
+```{r}
+
+k <- 3
+res_cal <- rbind(
+
+  # Value, confidence interval and test for calibration intercept
+  "Intercept" = with(
+    summary(fit_cal_int)$mean,
+    c(
+      "estimate" = estimate,
+      `2.5 %` = estimate - qnorm(0.975) * san.se,
+      `97.5 %` = estimate + qnorm(0.975) * san.se
+    )
+  ),
+
+  # Value, confidence interval and test for calibration slope
+  "Slope" = with(
+    summary(fit_cal_slope)$mean["cll_pred", ],
+    c(
+      "estimate" = 1 + estimate,
+      `2.5 %` = 1 + (estimate - qnorm(0.975) * san.se),
+      `97.5 %` = 1 + (estimate + qnorm(0.975) * san.se)
+    )
+  )
+)
+
+res_cal_2years <- round(res_cal, k)
+
+write.csv(res_cal_2years,"res_cal_2years.csv")
+res_cal_2years
+
+
+```
+
+
+##### 5 years
+
+```{r}
+
+start_time = Sys.time()
+
+# Calibration plot (pseudo-obs approach) ----------------------------------
+# First compute riskRegression::Score()
+
+vdata <- x %>% 
+  dplyr::select(patient_id, score_5yrs_Benchmark, time1,status1) 
+
+names(vdata)=c("ID","score","time","status")
+
+primary_event <- 1
+
+# Add estimated risk and complementary log-log of it to dataset
+vdata$pred <- vdata$score
+horizon <- 5
+pred <- as.matrix(vdata$pred)
+
+
+score_vdata <- riskRegression::Score(
+  list("KFRE_validation" = pred),
+  formula = Hist(time, status) ~ 1,
+  cens.model = "km",
+  data = vdata,
+  conf.int = TRUE,
+  times = horizon,
+  #  metrics = c("auc", "brier"),
+  summary = c("ipa"),
+  cause = primary_event,
+  plots = "calibration"
+)
+
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+pseudos <- pseudos[order(pseudos$risk), ]
+
+
+pseudos = list(pseudos)
+smooth_pseudos = mclapply(pseudos, function(x){
+  smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = x,  span=0.33, degree = 1), se = F)
+},mc.cores = 69)
+# Use linear loess (weighted local regression with polynomial span=0.25, degree = 1) smoothing
+#smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = pseudos,span = 0.25, span=0.25, degree = 1), se = F)
+
+smooth_pseudos1 = data.frame(smooth_pseudos[[1]])
+names(smooth_pseudos1)=c("smooth_pseudos")
+pseudos = pseudos[[1]]
+
+pseudo_vals_overall <- data.frame(
+  obs = smooth_pseudos1$smooth_pseudos, 
+  risk = pseudos$risk,
+  Category = "Overall")
+
+Sys.time()-start_time
+
+```
+
+
+###### Plot
+
+```{r}
+
+pdf("PseudoCal_5yearBenchmarkIMPUTED.pdf")
+
+pseudo_vals_overall %>%
+  ggplot(aes(x = risk, y = obs)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2) +
+  geom_line() +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions") -> p1
+
+
+print(p1)
+dev.off()
+
+five_year_cal_data = pseudo_vals_overall
+
+```
+
+###### Intercept and slope
+
+```{r}
+
+## Calibration intercept and slope --------------------------------------
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+
+# Note:
+# - 'pseudos' is the data.frame with ACTUAL pseudo-observations, not the smoothed ones
+# - Column ID is not the id in vdata; it is just a number assigned to each row of
+# the original validation data sorted by time and event indicator
+pseudos$cll_pred <- log(-log(1 - pseudos$risk)) # add the cloglog risk ests
+
+pseudos <- pseudos[ !is.infinite(pseudos$cll_pred), ]
+
+# Fit model for calibration intercept
+fit_cal_int <- geese(
+  pseudovalue ~ offset(cll_pred),
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Fit model for calibration slope
+fit_cal_slope <- geese(
+  pseudovalue ~ offset(cll_pred) + cll_pred,
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Perform joint test on intercept and slope
+betas <- fit_cal_slope$beta
+vcov_mat <- fit_cal_slope$vbeta
+wald <- drop(betas %*% solve(vcov_mat) %*% betas)
+# pchisq(wald, df = 2, lower.tail = FALSE)
+```
+
+
+
+
+```{r}
+
+k <- 3
+res_cal <- rbind(
+
+  # Value, confidence interval and test for calibration intercept
+  "Intercept" = with(
+    summary(fit_cal_int)$mean,
+    c(
+      "estimate" = estimate,
+      `2.5 %` = estimate - qnorm(0.975) * san.se,
+      `97.5 %` = estimate + qnorm(0.975) * san.se
+    )
+  ),
+
+  # Value, confidence interval and test for calibration slope
+  "Slope" = with(
+    summary(fit_cal_slope)$mean["cll_pred", ],
+    c(
+      "estimate" = 1 + estimate,
+      `2.5 %` = 1 + (estimate - qnorm(0.975) * san.se),
+      `97.5 %` = 1 + (estimate + qnorm(0.975) * san.se)
+    )
+  )
+)
+res_cal_5years <- round(res_cal, k)
+
+write.csv(res_cal_5years,"res_cal_5years.csv")
+
+res_cal_5years
+
+```
+
+
+#### Combined calibration plot 
+
+##### All predicted and observed risk
+
+```{r}
+
+two_year_cal_data$Time = "2 years"
+two_year_cal_data$Model = "Benchmark"
+
+five_year_cal_data$Time = "5 years"
+five_year_cal_data$Model = "Benchmark"
+
+benchmark_cal_plot_data = rbind(two_year_cal_data,five_year_cal_data)
+
+saveRDS(benchmark_cal_plot_data,"benchmark_cal_plot_data_pseudo_values.rds")
+
+
+p1=ggplot(benchmark_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50))
+
+
+ggsave(p1,filename = "Plots/Benchmark_Combined_PlotsIMPUTED.jpeg",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "Plots/Benchmark_Combined_PlotsIMPUTED.pdf",width = 35,height = 15, dpi=300)
+
+```
+
+
+##### Restricted to predicted and observed risk below 0.5
+
+```{r}
+
+p1=ggplot(benchmark_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.1), limits = c(0, 0.5)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.1), limits = c(0, 0.5)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50))
+
+
+ggsave(p1,filename = "Plots/Benchmark_Combined_Plots_RestrictedIMPUTED.jpeg",width = 35,height = 15, dpi=300)
+
+ggsave(p1,filename = "Plots/Benchmark_Combined_Plots_RestrictedIMPUTED.pdf",width = 35,height = 15, dpi=300)
+
+```
+
+##### Restricted to predicted and observed risk below 0.1
+
+```{r}
+
+p1=ggplot(benchmark_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.05), limits = c(0, 0.1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.05), limits = c(0, 0.1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50))
+
+
+ggsave(p1,filename = "Plots/Benchmark_Combined_Plots_Restricted2IMPUTED.jpeg",width = 35,height = 15, dpi=300)
+
+ggsave(p1,filename = "Plots/Benchmark_Combined_Plots_Restricted2IMPUTED.pdf",width = 35,height = 15, dpi=300)
+
+```
+
+
+#### Combined calibration slope and Intercept
+
+```{r}
+
+res_cal_5years = data.frame(res_cal_5years)
+res_cal_5years = rownames_to_column(res_cal_5years, var = "Metric")
+res_cal_5years$Time = "5 years"
+res_cal_5years$Model = "Benchmark"
+
+res_cal_2years = data.frame(res_cal_2years)
+res_cal_2years = rownames_to_column(res_cal_2years, var = "Metric")
+res_cal_2years$Time = "2 years"
+res_cal_2years$Model = "Benchmark"
+
+cal_metrics_benchmark = rbind(res_cal_5years,res_cal_2years)
+
+cal_metrics_benchmark$"Metric estimate (95% CI)" = ifelse(is.na(cal_metrics_benchmark$estimate), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     cal_metrics_benchmark$estimate, cal_metrics_benchmark$X2.5.., cal_metrics_benchmark$X97.5..))
+
+cal_metrics_benchmark = cal_metrics_benchmark[,c(1,5:7)]
+saveRDS(cal_metrics_benchmark,"Calibration_summary_stats_Benchmark_IMPUTED.rds")
+
+```
+
+# CCA
+
+## 1. Benchmark model
+
+```{r}
+benchmark = readstata13::read.dta13("CCA.pdf_data_with__Benchmark_scores.dta")
+
+benchmark = benchmark %>% dplyr::select(
+  patient_id,
+  time1,status1,
+  LP,
+  score_2yrs_Benchmark,
+  score_5yrs_Benchmark
+  
+  ) 
+
+```
+
+##### 2 years
+
+```{r}
+
+start_time = Sys.time()
+
+# Calibration plot (pseudo-obs approach) ----------------------------------
+# First compute riskRegression::Score()
+
+vdata <- x %>% 
+  dplyr::select(patient_id, score_2yrs_Benchmark, time1,status1) 
+
+names(vdata)=c("ID","score","time","status")
+
+primary_event <- 1
+
+# Add estimated risk and complementary log-log of it to dataset
+vdata$pred <- vdata$score
+horizon <- 2
+pred <- as.matrix(vdata$pred)
+
+
+score_vdata <- riskRegression::Score(
+  list("KFRE_validation" = pred),
+  formula = Hist(time, status) ~ 1,
+  cens.model = "km",
+  data = vdata,
+  conf.int = TRUE,
+  times = horizon,
+  #  metrics = c("auc", "brier"),
+  summary = c("ipa"),
+  cause = primary_event,
+  plots = "calibration"
+)
+
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+pseudos <- pseudos[order(pseudos$risk), ]
+
+library(parallel)
+pseudos = list(pseudos)
+smooth_pseudos = mclapply(pseudos, function(x){
+  smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = x,  span=0.33, degree = 1), se = F)
+},mc.cores = 69)
+# Use linear loess (weighted local regression with polynomial span=0.25, degree = 1) smoothing
+#smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = pseudos,span = 0.25, span=0.25, degree = 1), se = F)
+
+smooth_pseudos1 = data.frame(smooth_pseudos[[1]])
+names(smooth_pseudos1)=c("smooth_pseudos")
+pseudos = pseudos[[1]]
+
+pseudo_vals_overall <- data.frame(
+  obs = smooth_pseudos1$smooth_pseudos, 
+  risk = pseudos$risk,
+  Category = "Overall")
+
+Sys.time()-start_time
+
+```
+
+
+###### Plot
+
+```{r}
+pdf("PseudoCal_2yearBenchmarkCCA.pdf.pdf")
+
+pseudo_vals_overall %>%
+  ggplot(aes(x = risk, y = obs)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2) +
+  geom_line() +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions") -> p1
+
+
+print(p1)
+dev.off()
+
+two_year_cal_data = pseudo_vals_overall
+
+```
+
+
+###### Intercept and slope
+
+```{r}
+
+## Calibration intercept and slope --------------------------------------
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+
+# Note:
+# - 'pseudos' is the data.frame with ACTUAL pseudo-observations, not the smoothed ones
+# - Column ID is not the id in vdata; it is just a number assigned to each row of
+# the original validation data sorted by time and event indicator
+pseudos$cll_pred <- log(-log(1 - pseudos$risk)) # add the cloglog risk ests
+
+# Fit model for calibration intercept
+fit_cal_int <- geese(
+  pseudovalue ~ offset(cll_pred),
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Fit model for calibration slope
+fit_cal_slope <- geese(
+  pseudovalue ~ offset(cll_pred) + cll_pred,
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Perform joint test on intercept and slope
+betas <- fit_cal_slope$beta
+vcov_mat <- fit_cal_slope$vbeta
+wald <- drop(betas %*% solve(vcov_mat) %*% betas)
+# pchisq(wald, df = 2, lower.tail = FALSE)
+```
+
+
+
+
+```{r}
+
+k <- 3
+res_cal <- rbind(
+
+  # Value, confidence interval and test for calibration intercept
+  "Intercept" = with(
+    summary(fit_cal_int)$mean,
+    c(
+      "estimate" = estimate,
+      `2.5 %` = estimate - qnorm(0.975) * san.se,
+      `97.5 %` = estimate + qnorm(0.975) * san.se
+    )
+  ),
+
+  # Value, confidence interval and test for calibration slope
+  "Slope" = with(
+    summary(fit_cal_slope)$mean["cll_pred", ],
+    c(
+      "estimate" = 1 + estimate,
+      `2.5 %` = 1 + (estimate - qnorm(0.975) * san.se),
+      `97.5 %` = 1 + (estimate + qnorm(0.975) * san.se)
+    )
+  )
+)
+
+res_cal_2years <- round(res_cal, k)
+
+write.csv(res_cal_2years,"res_cal_2years.csv")
+res_cal_2years
+
+
+```
+
+
+##### 5 years
+
+```{r}
+
+start_time = Sys.time()
+
+# Calibration plot (pseudo-obs approach) ----------------------------------
+# First compute riskRegression::Score()
+
+vdata <- x %>% 
+  dplyr::select(patient_id, score_5yrs_Benchmark, time1,status1) 
+
+names(vdata)=c("ID","score","time","status")
+
+primary_event <- 1
+
+# Add estimated risk and complementary log-log of it to dataset
+vdata$pred <- vdata$score
+horizon <- 5
+pred <- as.matrix(vdata$pred)
+
+
+score_vdata <- riskRegression::Score(
+  list("KFRE_validation" = pred),
+  formula = Hist(time, status) ~ 1,
+  cens.model = "km",
+  data = vdata,
+  conf.int = TRUE,
+  times = horizon,
+  #  metrics = c("auc", "brier"),
+  summary = c("ipa"),
+  cause = primary_event,
+  plots = "calibration"
+)
+
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+pseudos <- pseudos[order(pseudos$risk), ]
+
+
+pseudos = list(pseudos)
+smooth_pseudos = mclapply(pseudos, function(x){
+  smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = x,  span=0.33, degree = 1), se = F)
+},mc.cores = 69)
+# Use linear loess (weighted local regression with polynomial span=0.25, degree = 1) smoothing
+#smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = pseudos,span = 0.25, span=0.25, degree = 1), se = F)
+
+smooth_pseudos1 = data.frame(smooth_pseudos[[1]])
+names(smooth_pseudos1)=c("smooth_pseudos")
+pseudos = pseudos[[1]]
+
+pseudo_vals_overall <- data.frame(
+  obs = smooth_pseudos1$smooth_pseudos, 
+  risk = pseudos$risk,
+  Category = "Overall")
+
+Sys.time()-start_time
+
+```
+
+
+###### Plot
+
+```{r}
+
+pdf("PseudoCal_5yearBenchmarkCCA.pdf.pdf")
+
+pseudo_vals_overall %>%
+  ggplot(aes(x = risk, y = obs)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2) +
+  geom_line() +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions") -> p1
+
+
+print(p1)
+dev.off()
+
+five_year_cal_data = pseudo_vals_overall
+
+```
+
+###### Intercept and slope
+
+```{r}
+
+## Calibration intercept and slope --------------------------------------
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+
+# Note:
+# - 'pseudos' is the data.frame with ACTUAL pseudo-observations, not the smoothed ones
+# - Column ID is not the id in vdata; it is just a number assigned to each row of
+# the original validation data sorted by time and event indicator
+pseudos$cll_pred <- log(-log(1 - pseudos$risk)) # add the cloglog risk ests
+
+pseudos <- pseudos[ !is.infinite(pseudos$cll_pred), ]
+
+# Fit model for calibration intercept
+fit_cal_int <- geese(
+  pseudovalue ~ offset(cll_pred),
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Fit model for calibration slope
+fit_cal_slope <- geese(
+  pseudovalue ~ offset(cll_pred) + cll_pred,
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Perform joint test on intercept and slope
+betas <- fit_cal_slope$beta
+vcov_mat <- fit_cal_slope$vbeta
+wald <- drop(betas %*% solve(vcov_mat) %*% betas)
+# pchisq(wald, df = 2, lower.tail = FALSE)
+```
+
+
+
+
+```{r}
+
+k <- 3
+res_cal <- rbind(
+
+  # Value, confidence interval and test for calibration intercept
+  "Intercept" = with(
+    summary(fit_cal_int)$mean,
+    c(
+      "estimate" = estimate,
+      `2.5 %` = estimate - qnorm(0.975) * san.se,
+      `97.5 %` = estimate + qnorm(0.975) * san.se
+    )
+  ),
+
+  # Value, confidence interval and test for calibration slope
+  "Slope" = with(
+    summary(fit_cal_slope)$mean["cll_pred", ],
+    c(
+      "estimate" = 1 + estimate,
+      `2.5 %` = 1 + (estimate - qnorm(0.975) * san.se),
+      `97.5 %` = 1 + (estimate + qnorm(0.975) * san.se)
+    )
+  )
+)
+res_cal_5years <- round(res_cal, k)
+
+write.csv(res_cal_5years,"res_cal_5years.csv")
+
+res_cal_5years
+
+```
+
+
+#### Combined calibration plot 
+
+##### All predicted and observed risk
+
+```{r}
+
+two_year_cal_data$Time = "2 years"
+two_year_cal_data$Model = "Benchmark"
+
+five_year_cal_data$Time = "5 years"
+five_year_cal_data$Model = "Benchmark"
+
+benchmark_cal_plot_data = rbind(two_year_cal_data,five_year_cal_data)
+
+saveRDS(benchmark_cal_plot_data,"benchmark_cal_plot_data_pseudo_values.rds")
+
+
+p1=ggplot(benchmark_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50))
+
+
+ggsave(p1,filename = "Plots/Benchmark_Combined_PlotsCCA.pdf.jpeg",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "Plots/Benchmark_Combined_PlotsCCA.pdf.pdf",width = 35,height = 15, dpi=300)
+
+```
+
+
+##### Restricted to predicted and observed risk below 0.5
+
+```{r}
+
+p1=ggplot(benchmark_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.1), limits = c(0, 0.5)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.1), limits = c(0, 0.5)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50))
+
+
+ggsave(p1,filename = "Plots/Benchmark_Combined_Plots_RestrictedCCA.pdf.jpeg",width = 35,height = 15, dpi=300)
+
+ggsave(p1,filename = "Plots/Benchmark_Combined_Plots_RestrictedCCA.pdf.pdf",width = 35,height = 15, dpi=300)
+
+```
+
+##### Restricted to predicted and observed risk below 0.1
+
+```{r}
+
+p1=ggplot(benchmark_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.05), limits = c(0, 0.1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.05), limits = c(0, 0.1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50))
+
+
+ggsave(p1,filename = "Plots/Benchmark_Combined_Plots_Restricted2CCA.pdf.jpeg",width = 35,height = 15, dpi=300)
+
+ggsave(p1,filename = "Plots/Benchmark_Combined_Plots_Restricted2CCA.pdf.pdf",width = 35,height = 15, dpi=300)
+
+```
+
+
+#### Combined calibration slope and Intercept
+
+```{r}
+
+res_cal_5years = data.frame(res_cal_5years)
+res_cal_5years = rownames_to_column(res_cal_5years, var = "Metric")
+res_cal_5years$Time = "5 years"
+res_cal_5years$Model = "Benchmark"
+
+res_cal_2years = data.frame(res_cal_2years)
+res_cal_2years = rownames_to_column(res_cal_2years, var = "Metric")
+res_cal_2years$Time = "2 years"
+res_cal_2years$Model = "Benchmark"
+
+cal_metrics_benchmark = rbind(res_cal_5years,res_cal_2years)
+
+cal_metrics_benchmark$"Metric estimate (95% CI)" = ifelse(is.na(cal_metrics_benchmark$estimate), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     cal_metrics_benchmark$estimate, cal_metrics_benchmark$X2.5.., cal_metrics_benchmark$X97.5..))
+
+cal_metrics_benchmark = cal_metrics_benchmark[,c(1,5:7)]
+saveRDS(cal_metrics_benchmark,"Calibration_summary_stats_Benchmark_CCA.rds")
+
+```
+

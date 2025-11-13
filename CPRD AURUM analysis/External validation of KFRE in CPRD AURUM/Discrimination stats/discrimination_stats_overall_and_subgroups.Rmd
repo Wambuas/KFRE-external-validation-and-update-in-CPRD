@@ -1,0 +1,1916 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+
+rm(list = ls())
+
+library(tidyverse)
+library(riskRegression)
+library(plyr)
+#library(tidysurv)
+library(data.table)
+library(stringr)
+library(parallel)
+library(tableone)
+library(muhaz)
+library(survival)
+library(Hmisc)
+library(MASS)
+library(mfp)
+library(reshape2)
+library(flexsurv)
+library(devtools)
+library(prodlim)
+library(rms)
+library(rstpm2)
+library(survcomp)
+library(glmnet)
+library(caret)
+library(sjPlot)
+library(knitr)
+library(webshot)
+library(pROC)
+library(rmda)
+library(pseudo)
+library(lava)
+library(pec)
+library(mice)
+library(miceadds)
+library(rsample)
+
+```
+
+
+```{r}
+start_time000 = Sys.time()
+```
+
+
+# IMPUTED DATA
+
+## 1. Benchmark model
+
+```{r}
+
+imputed_data_with_scores = readstata13::read.dta13("IMPUTED_data_with__Benchmark_scores.dta")
+
+imputed_data_with_scores = imputed_data_with_scores %>% dplyr::select(
+  patient_id,
+  time1,status1,
+  LP,
+ score_2yrs_Benchmark,
+ score_5yrs_Benchmark) %>% dplyr::rename(PRACTICE_PATIENT_ID=patient_id)
+
+
+```
+
+
+```{r}
+
+table(imputed_data_with_scores$status1)
+
+```
+
+
+```{r}
+x = imputed_data_with_scores
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+###  1.0 Overall
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_benchmark_overall = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+write.csv(auc_matrix_benchmark_overall,"auc_matrix_benchmark_overall.csv")
+
+Sys.time()-start_time1
+
+```
+
+
+
+### 1.1 Ethnicity and Diabetes status
+
+
+#### 1.1.0 Ethnicity
+
+##### White
+
+```{r}
+
+white_ethnicity = subset(imputed_data_with_scores,imputed_data_with_scores$white_ethnicity==1)
+
+```
+
+
+
+
+```{r}
+
+table(white_ethnicity$status1)
+
+```
+
+
+```{r}
+x = white_ethnicity
+
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_benchmark_white = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+
+write.csv(auc_matrix_benchmark_white,"auc_matrix_benchmark_white.csv")
+
+Sys.time()-start_time1
+
+```
+
+
+##### Black
+
+```{r}
+
+black_ethnicity = subset(imputed_data_with_scores,imputed_data_with_scores$black_ethnicity==1)
+
+```
+
+
+
+
+```{r}
+
+table(black_ethnicity$status1)
+
+```
+
+
+```{r}
+x = black_ethnicity
+
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_benchmark_black = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+write.csv(auc_matrix_benchmark_black,"auc_matrix_benchmark_black.csv")
+
+
+Sys.time()-start_time1
+
+```
+
+
+
+##### Asian
+
+```{r}
+
+asian_ethnicity = subset(imputed_data_with_scores,imputed_data_with_scores$asian_ethnicity==1)
+
+```
+
+
+```{r}
+
+table(asian_ethnicity$status1)
+
+```
+
+
+```{r}
+x = asian_ethnicity
+
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_benchmark_asian = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+
+write.csv(auc_matrix_benchmark_asian,"auc_matrix_benchmark_asian.csv")
+
+
+Sys.time()-start_time1
+
+```
+
+
+##### Mixed
+
+```{r}
+
+mixed_ethnicity = subset(imputed_data_with_scores,imputed_data_with_scores$mixed_ethnicity==1)
+
+```
+
+
+```{r}
+
+table(mixed_ethnicity$status1)
+
+```
+
+
+```{r}
+x = mixed_ethnicity
+
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_benchmark_mixed = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+write.csv(auc_matrix_benchmark_mixed,"auc_matrix_benchmark_mixed.csv")
+
+
+Sys.time()-start_time1
+
+```
+
+
+
+##### Other
+
+```{r}
+
+other_ethnicity = subset(imputed_data_with_scores,imputed_data_with_scores$other_ethnicity==1)
+
+```
+
+
+```{r}
+
+table(other_ethnicity$status1)
+
+```
+
+
+```{r}
+x = other_ethnicity
+
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+boot_mat <- boot_mat[complete.cases(boot_mat), ]
+
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_benchmark_other = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+write.csv(auc_matrix_benchmark_other,"auc_matrix_benchmark_other.csv")
+
+Sys.time()-start_time1
+
+```
+
+
+##### Unknown
+
+```{r}
+
+unknown_ethnicity = subset(imputed_data_with_scores,imputed_data_with_scores$unknown_ethnicity==1)
+
+```
+
+
+```{r}
+
+table(unknown_ethnicity$status1)
+
+```
+
+
+```{r}
+x = unknown_ethnicity
+
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_benchmark_unknown = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+
+write.csv(auc_matrix_benchmark_unknown,"auc_matrix_benchmark_unknown.csv")
+
+
+Sys.time()-start_time1
+
+```
+
+
+#### 1.1.1 Diabetes status
+
+##### Diabetic
+
+```{r}
+
+diabetic = subset(imputed_data_with_scores,imputed_data_with_scores$diabetic==1)
+
+```
+
+
+
+```{r}
+
+table(diabetic$status1)
+
+```
+
+
+```{r}
+x = diabetic
+
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_benchmark_diabetic = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+
+write.csv(auc_matrix_benchmark_diabetic,"auc_matrix_benchmark_diabetic.csv")
+
+
+
+
+Sys.time()-start_time1
+
+```
+
+##### Non-Diabetic
+
+```{r}
+
+non_diabetic = subset(imputed_data_with_scores,imputed_data_with_scores$diabetic==0)
+
+```
+
+
+
+```{r}
+
+table(non_diabetic$status1)
+
+```
+
+
+```{r}
+x = non_diabetic
+
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_nondiabetic = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+
+write.csv(auc_matrix_nondiabetic,"auc_matrix_benchmark_nondiabetic.csv")
+
+
+Sys.time()-start_time1
+
+```
+
+
+### Combine TD AUC
+
+
+```{r}
+
+white = read.csv("auc_matrix_benchmark_overall.csv")
+white$Group = "White"
+
+black = read.csv("auc_matrix_benchmark_black.csv")
+black$Group = "Black"
+
+asian= read.csv("auc_matrix_benchmark_asian.csv")
+asian$Group = "Asian"
+
+mixed = read.csv("auc_matrix_benchmark_mixed.csv")
+mixed$Group = "Mixed"
+
+other = read.csv("auc_matrix_benchmark_other.csv")
+other$Group = "other"
+
+unknown = read.csv("auc_matrix_benchmark_unknown.csv")
+unknown$Group = "Unknown"
+
+diabetic = read.csv("auc_matrix_benchmark_diabetic.csv")
+diabetic$Group = "Diabetic"
+
+nondiabetic = read.csv("auc_matrix_benchmark_nondiabetic.csv")
+nondiabetic$Group = "Nondiabetic"
+
+overall = read.csv("auc_matrix_benchmark_overall.csv")
+overall$Group = "Overall"
+
+```
+
+
+```{r}
+combined_benchmark = rbind(white,
+                 black,
+                 asian,
+                 mixed,
+                 other,
+                 unknown,
+                 diabetic,
+                 nondiabetic,
+                 overall
+                 )
+
+combined_benchmark$Time = combined_benchmark$Model
+
+```
+
+
+
+```{r}
+
+combined_benchmark = combined_benchmark %>% dplyr::rename("TD AUC"="TD.AUC..timeROC.")
+
+combined_benchmark = combined_benchmark %>% dplyr::select("Group","Time","TD AUC")
+combined_benchmark = combined_benchmark %>% tidyr::spread("Time","TD AUC")
+combined_benchmark = combined_benchmark[c(7,9,2,1,4,6,8,3,5),]
+
+write.csv(combined_benchmark,"Combined_Benchmark_TDAUC_IMPUTED.csv")
+
+
+```
+
+
+
+# CCA DATA
+
+## 1. Benchmark model
+
+```{r}
+
+cca_data_with_scores = readstata13::read.dta13("CCA_data_with__Benchmark_scores.dta")
+
+cca_data_with_scores = cca_data_with_scores %>% dplyr::select(
+  patient_id,
+  time1,status1,
+  LP,
+ score_2yrs_Benchmark,
+ score_5yrs_Benchmark) %>% dplyr::rename(PRACTICE_PATIENT_ID=patient_id)
+
+
+```
+
+
+```{r}
+
+table(cca_data_with_scores$status1)
+
+```
+
+
+```{r}
+x = cca_data_with_scores
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+###  1.0 Overall
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_benchmark_overall = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+write.csv(auc_matrix_benchmark_overall,"auc_matrix_benchmark_overall.csv")
+
+Sys.time()-start_time1
+
+```
+
+
+
+### 1.1 Ethnicity and Diabetes status
+
+
+#### 1.1.0 Ethnicity
+
+##### White
+
+```{r}
+
+white_ethnicity = subset(cca_data_with_scores,cca_data_with_scores$white_ethnicity==1)
+
+```
+
+
+
+
+```{r}
+
+table(white_ethnicity$status1)
+
+```
+
+
+```{r}
+x = white_ethnicity
+
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_benchmark_white = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+
+write.csv(auc_matrix_benchmark_white,"auc_matrix_benchmark_white.csv")
+
+Sys.time()-start_time1
+
+```
+
+
+##### Black
+
+```{r}
+
+black_ethnicity = subset(cca_data_with_scores,cca_data_with_scores$black_ethnicity==1)
+
+```
+
+
+
+
+```{r}
+
+table(black_ethnicity$status1)
+
+```
+
+
+```{r}
+x = black_ethnicity
+
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_benchmark_black = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+write.csv(auc_matrix_benchmark_black,"auc_matrix_benchmark_black.csv")
+
+
+Sys.time()-start_time1
+
+```
+
+
+
+##### Asian
+
+```{r}
+
+asian_ethnicity = subset(cca_data_with_scores,cca_data_with_scores$asian_ethnicity==1)
+
+```
+
+
+```{r}
+
+table(asian_ethnicity$status1)
+
+```
+
+
+```{r}
+x = asian_ethnicity
+
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_benchmark_asian = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+
+write.csv(auc_matrix_benchmark_asian,"auc_matrix_benchmark_asian.csv")
+
+
+Sys.time()-start_time1
+
+```
+
+
+##### Mixed
+
+```{r}
+
+mixed_ethnicity = subset(cca_data_with_scores,cca_data_with_scores$mixed_ethnicity==1)
+
+```
+
+
+```{r}
+
+table(mixed_ethnicity$status1)
+
+```
+
+
+```{r}
+x = mixed_ethnicity
+
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_benchmark_mixed = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+write.csv(auc_matrix_benchmark_mixed,"auc_matrix_benchmark_mixed.csv")
+
+
+Sys.time()-start_time1
+
+```
+
+
+
+##### Other
+
+```{r}
+
+other_ethnicity = subset(cca_data_with_scores,cca_data_with_scores$other_ethnicity==1)
+
+```
+
+
+```{r}
+
+table(other_ethnicity$status1)
+
+```
+
+
+```{r}
+x = other_ethnicity
+
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+boot_mat <- boot_mat[complete.cases(boot_mat), ]
+
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_benchmark_other = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+write.csv(auc_matrix_benchmark_other,"auc_matrix_benchmark_other.csv")
+
+Sys.time()-start_time1
+
+```
+
+
+##### Unknown
+
+```{r}
+
+unknown_ethnicity = subset(cca_data_with_scores,cca_data_with_scores$unknown_ethnicity==1)
+
+```
+
+
+```{r}
+
+table(unknown_ethnicity$status1)
+
+```
+
+
+```{r}
+x = unknown_ethnicity
+
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_benchmark_unknown = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+
+write.csv(auc_matrix_benchmark_unknown,"auc_matrix_benchmark_unknown.csv")
+
+
+Sys.time()-start_time1
+
+```
+
+
+#### 1.1.1 Diabetes status
+
+##### Diabetic
+
+```{r}
+
+diabetic = subset(cca_data_with_scores,cca_data_with_scores$diabetic==1)
+
+```
+
+
+
+```{r}
+
+table(diabetic$status1)
+
+```
+
+
+```{r}
+x = diabetic
+
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_benchmark_diabetic = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+
+write.csv(auc_matrix_benchmark_diabetic,"auc_matrix_benchmark_diabetic.csv")
+
+
+
+
+Sys.time()-start_time1
+
+```
+
+##### Non-Diabetic
+
+```{r}
+
+non_diabetic = subset(cca_data_with_scores,cca_data_with_scores$diabetic==0)
+
+```
+
+
+
+```{r}
+
+table(non_diabetic$status1)
+
+```
+
+
+```{r}
+x = non_diabetic
+
+
+## Censor events to 2 and 5 years
+
+x = x %>% dplyr::mutate(
+  
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1)
+  
+)
+
+```
+
+
+```{r}
+library(timeROC)
+
+start_time1 = Sys.time()
+
+horizons <- c(2, 5) 
+
+x2 = x %>% dplyr::select(time1,status1,LP)
+
+n <- nrow(x2)
+
+roc0 <- timeROC(T = x2$time1,
+  delta  = x2$status1,
+  marker = x2$LP,
+  cause  = 1,                 
+  times  = horizons,       
+  weighting = "marginal",     
+  iid    = F)
+
+auc_hat <- roc0$AUC_1
+auc_hat
+# Bootstrap
+B <- 1000
+set.seed(1234)
+ids <- replicate(B, sample.int(n, replace=TRUE), simplify=FALSE)
+
+boot_auc <- mclapply(ids, function(idx){
+  tr <- timeROC(T=x2$time1[idx], delta=x2$status1[idx], marker=x2$LP[idx],
+                cause=1, times=horizons, weighting="marginal", iid=FALSE)
+  tr$AUC_1
+}, mc.cores = 69)
+
+
+boot_mat <- do.call(rbind, boot_auc)
+
+# Percentile CIs
+ci <- t(apply(boot_mat, 2, quantile, c(.025,.975)))
+auc_matrix = data.frame(time = horizons, AUC = auc_hat, LCL = ci[,1], UCL = ci[,2])
+auc_matrix
+
+#### Time dependent AUC using timeROC
+auc_matrix$Model = c("Benchmark 2 years","Benchmark 5 years")
+
+auc_matrix$"TD AUC (timeROC)" <- ifelse(is.na(auc_matrix$LCL), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     auc_matrix$AUC, auc_matrix$LCL, auc_matrix$UCL))
+
+auc_matrix_nondiabetic = auc_matrix %>% dplyr::select("Model","TD AUC (timeROC)")
+
+
+write.csv(auc_matrix_nondiabetic,"auc_matrix_benchmark_nondiabetic.csv")
+
+
+Sys.time()-start_time1
+
+```
+
+
+### Combine TD AUC
+
+
+```{r}
+
+white = read.csv("auc_matrix_benchmark_overall.csv")
+white$Group = "White"
+
+black = read.csv("auc_matrix_benchmark_black.csv")
+black$Group = "Black"
+
+asian= read.csv("auc_matrix_benchmark_asian.csv")
+asian$Group = "Asian"
+
+mixed = read.csv("auc_matrix_benchmark_mixed.csv")
+mixed$Group = "Mixed"
+
+other = read.csv("auc_matrix_benchmark_other.csv")
+other$Group = "other"
+
+unknown = read.csv("auc_matrix_benchmark_unknown.csv")
+unknown$Group = "Unknown"
+
+diabetic = read.csv("auc_matrix_benchmark_diabetic.csv")
+diabetic$Group = "Diabetic"
+
+nondiabetic = read.csv("auc_matrix_benchmark_nondiabetic.csv")
+nondiabetic$Group = "Nondiabetic"
+
+overall = read.csv("auc_matrix_benchmark_overall.csv")
+overall$Group = "Overall"
+
+```
+
+
+```{r}
+combined_benchmark = rbind(white,
+                 black,
+                 asian,
+                 mixed,
+                 other,
+                 unknown,
+                 diabetic,
+                 nondiabetic,
+                 overall
+                 )
+
+combined_benchmark$Time = combined_benchmark$Model
+
+```
+
+
+```{r}
+
+combined_benchmark = combined_benchmark %>% dplyr::rename("TD AUC"="TD.AUC..timeROC.")
+
+combined_benchmark = combined_benchmark %>% dplyr::select("Group","Time","TD AUC")
+combined_benchmark = combined_benchmark %>% tidyr::spread("Time","TD AUC")
+combined_benchmark = combined_benchmark[c(7,9,2,1,4,6,8,3,5),]
+
+write.csv(combined_benchmark,"Combined_Benchmark_TDAUC_CCA.csv")
+
+
+```
+
+
+
+
+
+
+
+
+
+

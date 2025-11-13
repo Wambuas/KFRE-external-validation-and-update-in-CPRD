@@ -107,6 +107,8 @@ summary(incomplete_data)
 ```
 
 
+### CCA data 
+
 #### Subset to incomplete data with no missing ACR (CCA data)
 
 ```{r}
@@ -139,7 +141,7 @@ summary(cca_data$acr)
 ```
 
 
-### Convert ACR back to mg/mmol from log and then convert to mg/g and log transform for KFRE implementation
+#### Convert ACR back to mg/mmol from log and then convert to mg/g and log transform for KFRE implementation
 
 ```{r}
 cca_data$ACR_value = (exp((cca_data$acr)-0.001))*8.84
@@ -152,7 +154,6 @@ cca_data$ACR_value = log(cca_data$ACR_value+0.001)
 summary(cca_data$acr)
 ```
 
-### cca_data data
 
 #### Original and Benchmark models scores
 
@@ -243,7 +244,7 @@ first_complete_data$time[first_complete_data$time>5] <- 5 # truncate survival ti
 ```
 
 
-### Convert ACR back to mg/mmol from log and then convert to mg/g and log transform
+#### Convert ACR back to mg/mmol from log and then convert to mg/g and log transform
 
 ```{r}
 
@@ -296,7 +297,7 @@ x = cca_data %>% dplyr::mutate(
  
 ```
 
-
+#### Select variables I need and define binary ethnicity variables for later
 ```{r}
 x = x %>% dplyr::select(patient_id,sex,logACR,age,age1,egfr1,diabetic,ethnicity,LP,score_2yrs_orig,score_2yrs_Benchmark,score_5yrs_orig,score_5yrs_Benchmark,time1,status1,time2yrs,time5yrs,status2yrs,status5yrs)
 
