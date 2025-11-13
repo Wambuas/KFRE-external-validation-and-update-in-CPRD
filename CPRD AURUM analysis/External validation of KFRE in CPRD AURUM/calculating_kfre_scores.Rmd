@@ -1,0 +1,316 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+
+rm(list = ls())
+
+library(tidyverse)
+library(riskRegression)
+library(plyr)
+#library(tidysurv)
+library(data.table)
+library(stringr)
+library(parallel)
+library(tableone)
+library(muhaz)
+library(survival)
+library(Hmisc)
+library(MASS)
+library(mfp)
+library(reshape2)
+library(flexsurv)
+library(devtools)
+library(prodlim)
+library(rms)
+library(rstpm2)
+library(survcomp)
+library(glmnet)
+library(caret)
+library(sjPlot)
+library(knitr)
+library(webshot)
+library(pROC)
+library(rmda)
+library(pseudo)
+library(lava)
+library(pec)
+library(mice)
+library(miceadds)
+
+```
+
+
+## Data with missing ACR
+
+```{r}
+incomplete_data=readRDS("incomplete_data.rds") 
+
+names(incomplete_data)
+
+```
+
+
+### Importing data imputed with outcome
+
+```{r}
+load("imputed_data.rda")
+```
+
+
+```{r}
+complete_data=complete(imp.surv, action = "long", include = TRUE)
+
+```
+
+### List of imputed datasets
+
+```{r}
+
+first_complete_data = subset(complete_data,complete_data$.imp==1) #select first imputation
+first_complete_data = first_complete_data %>% dplyr::select(PRACTICE_PATIENT_ID,ACR_value) #note the name of the imputed ACR is ACR_value
+
+
+```
+
+
+#### Add imputed ACR to data with Missing ACR
+
+```{r}
+incomplete_data = left_join(incomplete_data,first_complete_data,by=c("PRACTICE_PATIENT_ID"))
+
+```
+
+
+```{r}
+options(bitmapType='cairo')
+```
+
+#### Compare distribution of imputed ACR variable (ACR_value) vs variable with missing ACR (acr)
+
+```{r}
+summary(incomplete_data$acr)
+```
+
+
+```{r}
+summary(incomplete_data$ACR_value)
+```
+
+
+```{r}
+summary(incomplete_data)
+```
+
+
+#### Subset to incomplete data with no missing ACR (CCA data)
+
+```{r}
+
+cca_data = subset(incomplete_data,!is.na(incomplete_data$acr))
+
+cca_data = cca_data %>% dplyr::mutate(acr_orig = acr) %>% dplyr::select(-acr) %>% 
+dplyr::rename(acr=ACR_value, Age2=age)
+
+```
+
+
+```{r}
+colMeans(is.na(cca_data))
+```
+
+
+```{r}
+cca_data$time1 = cca_data$time
+cca_data$status1 = cca_data$status
+
+cca_data$status[cca_data$time>5] <-0# censor events after 5 years
+cca_data$time[cca_data$time>5] <- 5 # truncate survival time at 5 years
+
+```
+
+
+```{r}
+summary(cca_data$acr)
+```
+
+
+### Convert ACR back to mg/mmol from log and then convert to mg/g and log transform for KFRE implementation
+
+```{r}
+cca_data$ACR_value = (exp((cca_data$acr)-0.001))*8.84
+cca_data$ACR_value = log(cca_data$ACR_value+0.001)
+
+```
+
+
+```{r}
+summary(cca_data$acr)
+```
+
+### cca_data data
+
+#### Original and Benchmark models scores
+
+
+```{r}
+s2_orig = 0.9832
+s2_recal = 0.9878
+s5_orig = 0.9365
+s5_recal = 0.9570
+
+
+x = cca_data %>% dplyr::mutate(
+  
+  sex=ifelse(female== 0, 1, 0),
+  logACR = ACR_value,
+  age = Age2,
+  age1 = age/10,
+  egfr1 = EGFR2/5,
+  ### 2 years
+  #original KFRE
+  LP = ((-0.2201*(age1-7.036))
+                  + (0.2467*(sex-0.5642))
+                  - (0.5567*(egfr1-7.222))+
+                    (0.4510*(logACR-5.137))),
+  
+  score_2yrs_orig = (1-(s2_orig ^ exp(LP))),
+ #Recalibrated KFRE (Benchmark)
+  score_2yrs_Benchmark = (1-(s2_recal ^ exp(LP))),
+  
+   ### 5 years
+  #original KFRE
+  score_5yrs_orig = (1-(s5_orig ^ exp(LP))),
+ #Recalibrated KFRE (Benchmark)
+  score_5yrs_Benchmark = (1-(s5_recal ^ exp(LP))),
+  
+
+ 
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1),
+  patient_id = PRACTICE_PATIENT_ID)
+ 
+```
+
+#### Select variables I need and define binary ethnicity variables for later
+
+```{r}
+x = x %>% dplyr::select(patient_id,sex,logACR,age,age1,egfr1,diabetic,ethnicity,LP,score_2yrs_orig,score_2yrs_Benchmark,score_5yrs_orig,score_5yrs_Benchmark,time1,status1,time2yrs,time5yrs,status2yrs,status5yrs)
+
+x = x %>% dplyr::mutate(
+  
+  white_ethnicity = ifelse(ethnicity=="White",1,0),
+  black_ethnicity = ifelse(ethnicity=="Black",1,0),
+  asian_ethnicity = ifelse(ethnicity=="South Asian",1,0),
+  mixed_ethnicity = ifelse(ethnicity=="Mixed race",1,0),
+  other_ethnicity = ifelse(ethnicity=="Others",1,0),
+  unknown_ethnicity = as.integer(ifelse(ethnicity=="Missing",1,0))
+)
+
+write_dta(x,"CCA_data_with__Benchmark_scores.dta")
+
+```
+
+
+### Imputed data
+
+
+```{r}
+### remove variable with missing ACR (acr) and replace it with the imputed variable (ACR_value)
+first_complete_data = incomplete_data %>% dplyr::select(-acr) %>% dplyr::rename(acr=ACR_value, Age2=age)
+
+```
+
+
+```{r}
+colMeans(is.na(first_complete_data))
+```
+
+
+```{r}
+first_complete_data$time1 = first_complete_data$time
+first_complete_data$status1 = first_complete_data$status
+
+first_complete_data$status[first_complete_data$time>5] <-0# censor events after 5 years
+first_complete_data$time[first_complete_data$time>5] <- 5 # truncate survival time at 5 years
+
+```
+
+
+### Convert ACR back to mg/mmol from log and then convert to mg/g and log transform
+
+```{r}
+
+first_complete_data$ACR_value =exp((first_complete_data$acr)-0.001)*8.84
+first_complete_data$ACR_value = log(first_complete_data$ACR_value+0.001)
+
+```
+
+
+#### Original and Benchmark models scores
+
+```{r}
+s2_orig = 0.9832
+s2_recal = 0.9878
+s5_orig = 0.9365
+s5_recal = 0.9570
+
+
+x = cca_data %>% dplyr::mutate(
+  
+  sex=ifelse(female== 0, 1, 0),
+  logACR = ACR_value,
+  age = Age2,
+  age1 = age/10,
+  egfr1 = EGFR2/5,
+  ### 2 years
+  #original KFRE
+  LP = ((-0.2201*(age1-7.036))
+                  + (0.2467*(sex-0.5642))
+                  - (0.5567*(egfr1-7.222))+
+                    (0.4510*(logACR-5.137))),
+  
+  score_2yrs_orig = (1-(s2_orig ^ exp(LP))),
+ #Recalibrated KFRE (Benchmark)
+  score_2yrs_Benchmark = (1-(s2_recal ^ exp(LP))),
+  
+   ### 5 years
+  #original KFRE
+  score_5yrs_orig = (1-(s5_orig ^ exp(LP))),
+ #Recalibrated KFRE (Benchmark)
+  score_5yrs_Benchmark = (1-(s5_recal ^ exp(LP))),
+  
+
+ 
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1),
+  patient_id = PRACTICE_PATIENT_ID)
+ 
+```
+
+
+```{r}
+x = x %>% dplyr::select(patient_id,sex,logACR,age,age1,egfr1,diabetic,ethnicity,LP,score_2yrs_orig,score_2yrs_Benchmark,score_5yrs_orig,score_5yrs_Benchmark,time1,status1,time2yrs,time5yrs,status2yrs,status5yrs)
+
+x = x %>% dplyr::mutate(
+  
+  white_ethnicity = ifelse(ethnicity=="White",1,0),
+  black_ethnicity = ifelse(ethnicity=="Black",1,0),
+  asian_ethnicity = ifelse(ethnicity=="South Asian",1,0),
+  mixed_ethnicity = ifelse(ethnicity=="Mixed race",1,0),
+  other_ethnicity = ifelse(ethnicity=="Others",1,0),
+  unknown_ethnicity = as.integer(ifelse(ethnicity=="Missing",1,0))
+)
+
+write_dta(x,"IMPUTED_data_with__Benchmark_scores.dta")
+
+```
+
