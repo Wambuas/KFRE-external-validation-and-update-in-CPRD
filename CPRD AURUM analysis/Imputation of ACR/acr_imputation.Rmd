@@ -338,6 +338,7 @@ exclude_from_imputataion = incomplete_data %>% dplyr::select(PRACTICE_PATIENT_ID
 ## Exclude variables i don't need from imputation dataset
 incomplete_data = incomplete_data %>% dplyr::select(-rrt_2yrs,-rrt_5yrs)
 
+
 ```
 
 
