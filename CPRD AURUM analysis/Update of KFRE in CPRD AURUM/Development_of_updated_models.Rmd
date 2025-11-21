@@ -6,8 +6,6 @@ output: html_notebook
 
 ```{r}
 
-#Start at 5.50 am Tuesday
-
 rm(list = ls())
 
 library(tidyverse)
