@@ -135,7 +135,7 @@ imputed_dataset = imputed_dataset %>% dplyr::mutate(
 
 imputed_dataset_all_variables = imputed_dataset ##keep a copy with all variables first named "imputed_dataset_all_variables"
 
-imputed_dataset = imputed_dataset %>% dplyr::select(PRACTICE_PATIENT_ID,age,male,eGFR,acr,time,status)
+imputed_dataset = imputed_dataset %>% dplyr::select(PRACTICE_PATIENT_ID,age,male,eGFR,acr,time,status,ethnicity,diabetic)
 
 ```
 

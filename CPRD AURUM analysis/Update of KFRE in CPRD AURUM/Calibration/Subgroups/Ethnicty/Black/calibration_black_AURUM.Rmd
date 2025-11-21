@@ -1,0 +1,2553 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+
+rm(list=ls())
+
+if (!require("pacman")) install.packages("pacman")
+library(pacman)
+
+library(riskRegression)
+
+pacman::p_load(
+  survival,
+  rms,
+  cmprsk,
+  mstate,
+  pseudo,
+  pec,
+  plotrix,
+  knitr,
+  splines,
+  kableExtra,
+  gtsummary,
+  boot,
+  tidyverse,
+  rsample,
+  gridExtra,
+  webshot
+)
+
+library(readstata13)
+
+
+options(bitmapType='cairo')
+
+start_time00 = Sys.time()
+
+```
+
+# Models
+
+## 1. Benchmark model
+
+```{r}
+benchmark = readstata13::read.dta13("IMPUTED_data_with__Benchmark_scores.dta")
+
+imputed_data_with_scores = imputed_data_with_scores %>% dplyr::select(
+  patient_id,
+  time1,status1,
+  LP,
+ score_2yrs_Benchmark,
+ score_5yrs_Benchmark,
+  ethnicity,diabetic) %>% dplyr::rename(PRACTICE_PATIENT_ID=patient_id)
+
+benchmark = subset(benchmark,benchmark$ethnicity=="Black")
+```
+
+### Calculating the risk scores using the Benchmark model
+
+```{r}
+
+x = benchmark 
+
+```
+
+##### 2 years
+
+```{r}
+
+start_time = Sys.time()
+
+# Calibration plot (pseudo-obs approach) ----------------------------------
+# First compute riskRegression::Score()
+
+vdata <- x %>% 
+  dplyr::select(patient_id, score_2yrs_Benchmark, time1,status1) 
+
+names(vdata)=c("ID","score","time","status")
+
+primary_event <- 1
+
+# Add estimated risk and complementary log-log of it to dataset
+vdata$pred <- vdata$score
+horizon <- 2
+pred <- as.matrix(vdata$pred)
+
+
+score_vdata <- riskRegression::Score(
+  list("KFRE_validation" = pred),
+  formula = Hist(time, status) ~ 1,
+  cens.model = "km",
+  data = vdata,
+  conf.int = TRUE,
+  times = horizon,
+  #  metrics = c("auc", "brier"),
+  summary = c("ipa"),
+  cause = primary_event,
+  plots = "calibration"
+)
+
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+pseudos <- pseudos[order(pseudos$risk), ]
+
+library(parallel)
+pseudos = list(pseudos)
+smooth_pseudos = mclapply(pseudos, function(x){
+  smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = x,  span=0.33, degree = 1), se = F)
+},mc.cores = 69)
+# Use linear loess (weighted local regression with polynomial span=0.25, degree = 1) smoothing
+#smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = pseudos,span = 0.25, span=0.25, degree = 1), se = F)
+
+smooth_pseudos1 = data.frame(smooth_pseudos[[1]])
+names(smooth_pseudos1)=c("smooth_pseudos")
+pseudos = pseudos[[1]]
+
+pseudo_vals_overall <- data.frame(
+  obs = smooth_pseudos1$smooth_pseudos, 
+  risk = pseudos$risk,
+  Category = "Overall")
+
+Sys.time()-start_time
+
+```
+
+
+###### Plot
+
+```{r}
+pdf("PseudoCal_2yearBenchmark.pdf")
+
+pseudo_vals_overall %>%
+  ggplot(aes(x = risk, y = obs)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2) +
+  geom_line() +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions") -> p1
+
+
+print(p1)
+dev.off()
+
+two_year_cal_data = pseudo_vals_overall
+
+```
+
+
+###### Intercept and slope
+
+```{r}
+
+## Calibration intercept and slope --------------------------------------
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+
+# Note:
+# - 'pseudos' is the data.frame with ACTUAL pseudo-observations, not the smoothed ones
+# - Column ID is not the id in vdata; it is just a number assigned to each row of
+# the original validation data sorted by time and event indicator
+pseudos$cll_pred <- log(-log(1 - pseudos$risk)) # add the cloglog risk ests
+
+# Fit model for calibration intercept
+fit_cal_int <- geese(
+  pseudovalue ~ offset(cll_pred),
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Fit model for calibration slope
+fit_cal_slope <- geese(
+  pseudovalue ~ offset(cll_pred) + cll_pred,
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Perform joint test on intercept and slope
+betas <- fit_cal_slope$beta
+vcov_mat <- fit_cal_slope$vbeta
+wald <- drop(betas %*% solve(vcov_mat) %*% betas)
+# pchisq(wald, df = 2, lower.tail = FALSE)
+```
+
+
+
+
+```{r}
+
+k <- 3
+res_cal <- rbind(
+
+  # Value, confidence interval and test for calibration intercept
+  "Intercept" = with(
+    summary(fit_cal_int)$mean,
+    c(
+      "estimate" = estimate,
+      `2.5 %` = estimate - qnorm(0.975) * san.se,
+      `97.5 %` = estimate + qnorm(0.975) * san.se
+    )
+  ),
+
+  # Value, confidence interval and test for calibration slope
+  "Slope" = with(
+    summary(fit_cal_slope)$mean["cll_pred", ],
+    c(
+      "estimate" = 1 + estimate,
+      `2.5 %` = 1 + (estimate - qnorm(0.975) * san.se),
+      `97.5 %` = 1 + (estimate + qnorm(0.975) * san.se)
+    )
+  )
+)
+
+res_cal_2years <- round(res_cal, k)
+
+write.csv(res_cal_2years,"res_cal_2years.csv")
+res_cal_2years
+
+
+```
+
+
+##### 5 years
+
+```{r}
+
+start_time = Sys.time()
+
+# Calibration plot (pseudo-obs approach) ----------------------------------
+# First compute riskRegression::Score()
+
+vdata <- x %>% 
+  dplyr::select(patient_id, score_5yrs_Benchmark, time1,status1) 
+
+names(vdata)=c("ID","score","time","status")
+
+primary_event <- 1
+
+# Add estimated risk and complementary log-log of it to dataset
+vdata$pred <- vdata$score
+horizon <- 5
+pred <- as.matrix(vdata$pred)
+
+
+score_vdata <- riskRegression::Score(
+  list("KFRE_validation" = pred),
+  formula = Hist(time, status) ~ 1,
+  cens.model = "km",
+  data = vdata,
+  conf.int = TRUE,
+  times = horizon,
+  #  metrics = c("auc", "brier"),
+  summary = c("ipa"),
+  cause = primary_event,
+  plots = "calibration"
+)
+
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+pseudos <- pseudos[order(pseudos$risk), ]
+
+
+pseudos = list(pseudos)
+smooth_pseudos = mclapply(pseudos, function(x){
+  smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = x,  span=0.33, degree = 1), se = F)
+},mc.cores = 69)
+# Use linear loess (weighted local regression with polynomial span=0.25, degree = 1) smoothing
+#smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = pseudos,span = 0.25, span=0.25, degree = 1), se = F)
+
+smooth_pseudos1 = data.frame(smooth_pseudos[[1]])
+names(smooth_pseudos1)=c("smooth_pseudos")
+pseudos = pseudos[[1]]
+
+pseudo_vals_overall <- data.frame(
+  obs = smooth_pseudos1$smooth_pseudos, 
+  risk = pseudos$risk,
+  Category = "Overall")
+
+Sys.time()-start_time
+
+```
+
+
+###### Plot
+
+```{r}
+
+pdf("PseudoCal_5yearBenchmark.pdf")
+
+pseudo_vals_overall %>%
+  ggplot(aes(x = risk, y = obs)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2) +
+  geom_line() +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions") -> p1
+
+
+print(p1)
+dev.off()
+
+five_year_cal_data = pseudo_vals_overall
+
+```
+
+###### Intercept and slope
+
+```{r}
+
+## Calibration intercept and slope --------------------------------------
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+
+# Note:
+# - 'pseudos' is the data.frame with ACTUAL pseudo-observations, not the smoothed ones
+# - Column ID is not the id in vdata; it is just a number assigned to each row of
+# the original validation data sorted by time and event indicator
+pseudos$cll_pred <- log(-log(1 - pseudos$risk)) # add the cloglog risk ests
+
+pseudos <- pseudos[ !is.infinite(pseudos$cll_pred), ]
+
+# Fit model for calibration intercept
+fit_cal_int <- geese(
+  pseudovalue ~ offset(cll_pred),
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Fit model for calibration slope
+fit_cal_slope <- geese(
+  pseudovalue ~ offset(cll_pred) + cll_pred,
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Perform joint test on intercept and slope
+betas <- fit_cal_slope$beta
+vcov_mat <- fit_cal_slope$vbeta
+wald <- drop(betas %*% solve(vcov_mat) %*% betas)
+# pchisq(wald, df = 2, lower.tail = FALSE)
+```
+
+
+
+
+```{r}
+
+k <- 3
+res_cal <- rbind(
+
+  # Value, confidence interval and test for calibration intercept
+  "Intercept" = with(
+    summary(fit_cal_int)$mean,
+    c(
+      "estimate" = estimate,
+      `2.5 %` = estimate - qnorm(0.975) * san.se,
+      `97.5 %` = estimate + qnorm(0.975) * san.se
+    )
+  ),
+
+  # Value, confidence interval and test for calibration slope
+  "Slope" = with(
+    summary(fit_cal_slope)$mean["cll_pred", ],
+    c(
+      "estimate" = 1 + estimate,
+      `2.5 %` = 1 + (estimate - qnorm(0.975) * san.se),
+      `97.5 %` = 1 + (estimate + qnorm(0.975) * san.se)
+    )
+  )
+)
+res_cal_5years <- round(res_cal, k)
+
+write.csv(res_cal_5years,"res_cal_5years.csv")
+
+res_cal_5years
+
+```
+
+
+#### Combined calibration plot 
+
+##### All predicted and observed risk
+
+```{r}
+
+two_year_cal_data$Time = "2 years"
+two_year_cal_data$Model = "Benchmark"
+
+five_year_cal_data$Time = "5 years"
+five_year_cal_data$Model = "Benchmark"
+
+benchmark_cal_plot_data = rbind(two_year_cal_data,five_year_cal_data)
+
+saveRDS(benchmark_cal_plot_data,"benchmark_cal_plot_data_pseudo_values.rds")
+
+
+p1=ggplot(benchmark_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50))
+
+
+ggsave(p1,filename = "Benchmark_Combined_Plots.jpeg",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "Benchmark_Combined_Plots.pdf",width = 35,height = 15, dpi=300)
+
+```
+
+
+##### Restricted to predicted and observed risk below 0.5
+
+```{r}
+
+p1=ggplot(benchmark_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.1), limits = c(0, 0.5)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.1), limits = c(0, 0.5)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50))
+
+
+ggsave(p1,filename = "Benchmark_Combined_Plots_Restricted.jpeg",width = 35,height = 15, dpi=300)
+
+ggsave(p1,filename = "Benchmark_Combined_Plots_Restricted.pdf",width = 35,height = 15, dpi=300)
+
+```
+
+##### Restricted to predicted and observed risk below 0.1
+
+```{r}
+
+p1=ggplot(benchmark_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.05), limits = c(0, 0.1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.05), limits = c(0, 0.1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50))
+
+
+ggsave(p1,filename = "Benchmark_Combined_Plots_Restricted2.jpeg",width = 35,height = 15, dpi=300)
+
+ggsave(p1,filename = "Benchmark_Combined_Plots_Restricted2.pdf",width = 35,height = 15, dpi=300)
+
+```
+
+
+
+#### Combined calibration slope and Intercept
+
+```{r}
+
+res_cal_5years = data.frame(res_cal_5years)
+res_cal_5years = rownames_to_column(res_cal_5years, var = "Metric")
+res_cal_5years$Time = "5 years"
+res_cal_5years$Model = "Benchmark"
+
+res_cal_2years = data.frame(res_cal_2years)
+res_cal_2years = rownames_to_column(res_cal_2years, var = "Metric")
+res_cal_2years$Time = "2 years"
+res_cal_2years$Model = "Benchmark"
+
+cal_metrics_benchmark = rbind(res_cal_5years,res_cal_2years)
+
+cal_metrics_benchmark$"Metric estimate (95% CI)" = ifelse(is.na(cal_metrics_benchmark$estimate), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     cal_metrics_benchmark$estimate, cal_metrics_benchmark$X2.5.., cal_metrics_benchmark$X97.5..))
+
+cal_metrics_benchmark = cal_metrics_benchmark[,c(1,5:7)]
+saveRDS(cal_metrics_benchmark,"Calibration_summary_stats_Benchmark.rds")
+
+```
+
+
+## 2. Model1 model
+
+```{r}
+start_time0 = Sys.time()
+```
+
+
+```{r}
+
+kfre_uk1 = readRDS("data_ready_for_model1.rds")
+
+```
+
+
+
+
+```{r}
+
+model1 <- CSC(Hist(time, status) ~
+age1 + age2 + eGFR1 + eGFR2 + acr1 + acr2 + male,
+data = kfre_uk1,
+fitter = "cph"
+)
+
+fit_csc1 <- model1$models$`Cause 1`
+fit_csc2 <- model1$models$`Cause 2`
+
+
+```
+
+
+
+#### Calculating the risk scores using the Model1 model
+
+
+```{r}
+kfre_uk1 = subset(kfre_uk1,kfre_uk1$ethnicity=="Black")
+```
+
+
+##### 2 years
+
+```{r}
+
+start_time = Sys.time()
+
+# Calibration plot (pseudo-obs approach) ----------------------------------
+# First compute riskRegression::Score()
+
+# vdata <- x %>% 
+#   dplyr::select(patient_id, score_2yrs_Model1, time1,status1) 
+# 
+# names(vdata)=c("ID","score","time","status")
+# 
+primary_event <- 1
+# 
+# # Add estimated risk and complementary log-log of it to dataset
+# vdata$pred <- vdata$score
+horizon <- 2
+# pred <- as.matrix(vdata$pred)
+
+vdata = kfre_uk1 
+
+score_vdata <- riskRegression::Score(
+  list("KFRE_validation" = model1),
+  formula = Hist(time1, status1) ~ 1,
+  cens.model = "km",
+  data = vdata,
+  conf.int = TRUE,
+  times = horizon,
+  #  metrics = c("auc", "brier"),
+  summary = c("ipa"),
+  cause = primary_event,
+  plots = "calibration"
+)
+
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+pseudos <- pseudos[order(pseudos$risk), ]
+
+library(parallel)
+pseudos = list(pseudos)
+smooth_pseudos = mclapply(pseudos, function(x){
+  smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = x,  span=0.33, degree = 1), se = F)
+},mc.cores = 69)
+# Use linear loess (weighted local regression with polynomial span=0.25, degree = 1) smoothing
+#smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = pseudos,span = 0.25, span=0.25, degree = 1), se = F)
+
+smooth_pseudos1 = data.frame(smooth_pseudos[[1]])
+names(smooth_pseudos1)=c("smooth_pseudos")
+pseudos = pseudos[[1]]
+
+pseudo_vals_overall <- data.frame(
+  obs = smooth_pseudos1$smooth_pseudos, 
+  risk = pseudos$risk,
+  Category = "Overall")
+
+Sys.time()-start_time
+
+```
+
+
+###### Plot
+
+```{r}
+pdf("PseudoCal_2yearModel1.pdf")
+
+pseudo_vals_overall %>%
+  ggplot(aes(x = risk, y = obs)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2) +
+  geom_line() +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions") -> p1
+
+
+print(p1)
+dev.off()
+
+two_year_cal_data = pseudo_vals_overall
+
+```
+
+
+###### Intercept and slope
+
+```{r}
+
+## Calibration intercept and slope --------------------------------------
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+
+# Note:
+# - 'pseudos' is the data.frame with ACTUAL pseudo-observations, not the smoothed ones
+# - Column ID is not the id in vdata; it is just a number assigned to each row of
+# the original validation data sorted by time and event indicator
+pseudos$cll_pred <- log(-log(1 - pseudos$risk)) # add the cloglog risk ests
+
+# Fit model for calibration intercept
+fit_cal_int <- geese(
+  pseudovalue ~ offset(cll_pred),
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Fit model for calibration slope
+fit_cal_slope <- geese(
+  pseudovalue ~ offset(cll_pred) + cll_pred,
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Perform joint test on intercept and slope
+betas <- fit_cal_slope$beta
+vcov_mat <- fit_cal_slope$vbeta
+wald <- drop(betas %*% solve(vcov_mat) %*% betas)
+# pchisq(wald, df = 2, lower.tail = FALSE)
+```
+
+
+
+
+```{r}
+
+k <- 3
+res_cal <- rbind(
+
+  # Value, confidence interval and test for calibration intercept
+  "Intercept" = with(
+    summary(fit_cal_int)$mean,
+    c(
+      "estimate" = estimate,
+      `2.5 %` = estimate - qnorm(0.975) * san.se,
+      `97.5 %` = estimate + qnorm(0.975) * san.se
+    )
+  ),
+
+  # Value, confidence interval and test for calibration slope
+  "Slope" = with(
+    summary(fit_cal_slope)$mean["cll_pred", ],
+    c(
+      "estimate" = 1 + estimate,
+      `2.5 %` = 1 + (estimate - qnorm(0.975) * san.se),
+      `97.5 %` = 1 + (estimate + qnorm(0.975) * san.se)
+    )
+  )
+)
+
+res_cal_2years <- round(res_cal, k)
+
+write.csv(res_cal_2years,"res_cal_2years.csv")
+res_cal_2years
+
+
+```
+
+
+##### 5 years
+
+```{r}
+
+start_time = Sys.time()
+
+# Calibration plot (pseudo-obs approach) ----------------------------------
+# First compute riskRegression::Score()
+
+# vdata <- x %>% 
+#   dplyr::select(patient_id, score_5yrs_Model1, time1,status1) 
+# 
+# names(vdata)=c("ID","score","time","status")
+
+primary_event <- 1
+
+# Add estimated risk and complementary log-log of it to dataset
+# vdata$pred <- vdata$score
+horizon <- 5
+# pred <- as.matrix(vdata$pred)
+
+vdata = kfre_uk1 
+
+score_vdata <- riskRegression::Score(
+  list("KFRE_validation" = model1),
+  formula = Hist(time1, status1) ~ 1,
+  cens.model = "km",
+  data = vdata,
+  conf.int = TRUE,
+  times = horizon,
+  #  metrics = c("auc", "brier"),
+  summary = c("ipa"),
+  cause = primary_event,
+  plots = "calibration"
+)
+
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+pseudos <- pseudos[order(pseudos$risk), ]
+
+
+pseudos = list(pseudos)
+smooth_pseudos = mclapply(pseudos, function(x){
+  smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = x,  span=0.33, degree = 1), se = F)
+},mc.cores = 69)
+# Use linear loess (weighted local regression with polynomial span=0.25, degree = 1) smoothing
+#smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = pseudos,span = 0.25, span=0.25, degree = 1), se = F)
+
+smooth_pseudos1 = data.frame(smooth_pseudos[[1]])
+names(smooth_pseudos1)=c("smooth_pseudos")
+pseudos = pseudos[[1]]
+
+pseudo_vals_overall <- data.frame(
+  obs = smooth_pseudos1$smooth_pseudos, 
+  risk = pseudos$risk,
+  Category = "Overall")
+
+Sys.time()-start_time
+
+```
+
+
+###### Plot
+
+```{r}
+
+pdf("PseudoCal_5yearModel1.pdf")
+
+pseudo_vals_overall %>%
+  ggplot(aes(x = risk, y = obs)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2) +
+  geom_line() +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions") -> p1
+
+
+print(p1)
+dev.off()
+
+five_year_cal_data = pseudo_vals_overall
+
+```
+
+###### Intercept and slope
+
+```{r}
+
+## Calibration intercept and slope --------------------------------------
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+
+# Note:
+# - 'pseudos' is the data.frame with ACTUAL pseudo-observations, not the smoothed ones
+# - Column ID is not the id in vdata; it is just a number assigned to each row of
+# the original validation data sorted by time and event indicator
+pseudos$cll_pred <- log(-log(1 - pseudos$risk)) # add the cloglog risk ests
+
+# Fit model for calibration intercept
+fit_cal_int <- geese(
+  pseudovalue ~ offset(cll_pred),
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Fit model for calibration slope
+fit_cal_slope <- geese(
+  pseudovalue ~ offset(cll_pred) + cll_pred,
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Perform joint test on intercept and slope
+betas <- fit_cal_slope$beta
+vcov_mat <- fit_cal_slope$vbeta
+wald <- drop(betas %*% solve(vcov_mat) %*% betas)
+# pchisq(wald, df = 2, lower.tail = FALSE)
+```
+
+
+
+
+```{r}
+
+k <- 3
+res_cal <- rbind(
+
+  # Value, confidence interval and test for calibration intercept
+  "Intercept" = with(
+    summary(fit_cal_int)$mean,
+    c(
+      "estimate" = estimate,
+      `2.5 %` = estimate - qnorm(0.975) * san.se,
+      `97.5 %` = estimate + qnorm(0.975) * san.se
+    )
+  ),
+
+  # Value, confidence interval and test for calibration slope
+  "Slope" = with(
+    summary(fit_cal_slope)$mean["cll_pred", ],
+    c(
+      "estimate" = 1 + estimate,
+      `2.5 %` = 1 + (estimate - qnorm(0.975) * san.se),
+      `97.5 %` = 1 + (estimate + qnorm(0.975) * san.se)
+    )
+  )
+)
+res_cal_5years <- round(res_cal, k)
+
+write.csv(res_cal_5years,"res_cal_5years.csv")
+
+res_cal_5years
+
+```
+
+
+#### Combined calibration plot 
+
+##### All predicted and observed risk
+
+```{r}
+
+two_year_cal_data$Time = "2 years"
+two_year_cal_data$Model = "Model1"
+
+five_year_cal_data$Time = "5 years"
+five_year_cal_data$Model = "Model1"
+
+Model1_cal_plot_data = rbind(two_year_cal_data,five_year_cal_data)
+
+saveRDS(Model1_cal_plot_data,"Model1_cal_plot_data_pseudo_values.rds")
+
+
+p1=ggplot(Model1_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50))
+
+
+ggsave(p1,filename = "Model1_Combined_Plots.jpeg",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "Model1_Combined_Plots.pdf",width = 35,height = 15, dpi=300)
+
+```
+
+
+##### Restricted to predicted and observed risk below 0.5
+
+```{r}
+
+p1=ggplot(Model1_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.1), limits = c(0, 0.5)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.1), limits = c(0, 0.5)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50))
+
+
+ggsave(p1,filename = "Model1_Combined_Plots_Restricted.jpeg",width = 35,height = 15, dpi=300)
+
+ggsave(p1,filename = "Model1_Combined_Plots_Restricted.pdf",width = 35,height = 15, dpi=300)
+
+```
+
+##### Restricted to predicted and observed risk below 0.1
+
+```{r}
+
+p1=ggplot(Model1_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.05), limits = c(0, 0.1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.05), limits = c(0, 0.1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50))
+
+
+ggsave(p1,filename = "Model1_Combined_Plots_Restricted2.jpeg",width = 35,height = 15, dpi=300)
+
+ggsave(p1,filename = "Model1_Combined_Plots_Restricted2.pdf",width = 35,height = 15, dpi=300)
+
+```
+
+
+
+#### Combined calibration slope and Intercept
+
+```{r}
+
+res_cal_5years = data.frame(res_cal_5years)
+res_cal_5years = rownames_to_column(res_cal_5years, var = "Metric")
+res_cal_5years$Time = "5 years"
+res_cal_5years$Model = "Model1"
+
+res_cal_2years = data.frame(res_cal_2years)
+res_cal_2years = rownames_to_column(res_cal_2years, var = "Metric")
+res_cal_2years$Time = "2 years"
+res_cal_2years$Model = "Model1"
+
+cal_metrics_Model1 = rbind(res_cal_5years,res_cal_2years)
+
+cal_metrics_Model1$"Metric estimate (95% CI)" = ifelse(is.na(cal_metrics_Model1$estimate), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     cal_metrics_Model1$estimate, cal_metrics_Model1$X2.5.., cal_metrics_Model1$X97.5..))
+
+cal_metrics_Model1 = cal_metrics_Model1[,c(1,5:7)]
+saveRDS(cal_metrics_Model1,"Calibration_summary_stats_Model1.rds")
+
+```
+
+
+```{r}
+Sys.time()-start_time0
+```
+
+
+## 2. Model2 model
+
+```{r}
+start_time0 = Sys.time()
+```
+
+
+
+```{r}
+
+kfre_uk2 = readRDS("data_ready_for_model1.rds")
+
+```
+
+
+#### Calculating the risk scores using the Model2 model
+
+```{r}
+
+model2 <- CSC(Hist(time, status) ~
+age1 + age2 + eGFR1 + eGFR2 + acr1 + acr2 + male + diabetic + black_ethnicity+asian_ethnicity+mixed_ethnicity+other_ethnicity+unknown_ethnicity,
+data = kfre_uk2,
+fitter = "cph"
+)
+
+fit_csc1 <- model2$models$`Cause 1`
+fit_csc2 <- model2$models$`Cause 2`
+
+```
+
+
+```{r}
+kfre_uk2 = subset(kfre_uk2,kfre_uk2$ethnicity=="Black")
+```
+
+
+##### 2 years
+
+```{r}
+
+start_time = Sys.time()
+
+# Calibration plot (pseudo-obs approach) ----------------------------------
+# First compute riskRegression::Score()
+
+# vdata <- x %>% 
+#   dplyr::select(patient_id, score_2yrs_Model2, time1,status1) 
+# 
+# names(vdata)=c("ID","score","time","status")
+
+primary_event <- 1
+
+# Add estimated risk and complementary log-log of it to dataset
+# vdata$pred <- vdata$score
+horizon <- 2
+# pred <- as.matrix(vdata$pred)
+
+vdata = kfre_uk2
+
+score_vdata <- riskRegression::Score(
+  list("KFRE_validation" = model2),
+  formula = Hist(time1, status1) ~ 1,
+  cens.model = "km",
+  data = vdata,
+  conf.int = TRUE,
+  times = horizon,
+  #  metrics = c("auc", "brier"),
+  summary = c("ipa"),
+  cause = primary_event,
+  plots = "calibration"
+)
+
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+pseudos <- pseudos[order(pseudos$risk), ]
+
+library(parallel)
+pseudos = list(pseudos)
+smooth_pseudos = mclapply(pseudos, function(x){
+  smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = x,  span=0.33, degree = 1), se = F)
+},mc.cores = 69)
+# Use linear loess (weighted local regression with polynomial span=0.25, degree = 1) smoothing
+#smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = pseudos,span = 0.25, span=0.25, degree = 1), se = F)
+
+smooth_pseudos1 = data.frame(smooth_pseudos[[1]])
+names(smooth_pseudos1)=c("smooth_pseudos")
+pseudos = pseudos[[1]]
+
+pseudo_vals_overall <- data.frame(
+  obs = smooth_pseudos1$smooth_pseudos, 
+  risk = pseudos$risk,
+  Category = "Overall")
+
+Sys.time()-start_time
+
+```
+
+
+###### Plot
+
+```{r}
+pdf("PseudoCal_2yearModel2.pdf")
+
+pseudo_vals_overall %>%
+  ggplot(aes(x = risk, y = obs)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2) +
+  geom_line() +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions") -> p1
+
+
+print(p1)
+dev.off()
+
+two_year_cal_data = pseudo_vals_overall
+
+```
+
+
+###### Intercept and slope
+
+```{r}
+
+## Calibration intercept and slope --------------------------------------
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+
+# Note:
+# - 'pseudos' is the data.frame with ACTUAL pseudo-observations, not the smoothed ones
+# - Column ID is not the id in vdata; it is just a number assigned to each row of
+# the original validation data sorted by time and event indicator
+pseudos$cll_pred <- log(-log(1 - pseudos$risk)) # add the cloglog risk ests
+
+# Fit model for calibration intercept
+fit_cal_int <- geese(
+  pseudovalue ~ offset(cll_pred),
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Fit model for calibration slope
+fit_cal_slope <- geese(
+  pseudovalue ~ offset(cll_pred) + cll_pred,
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Perform joint test on intercept and slope
+betas <- fit_cal_slope$beta
+vcov_mat <- fit_cal_slope$vbeta
+wald <- drop(betas %*% solve(vcov_mat) %*% betas)
+# pchisq(wald, df = 2, lower.tail = FALSE)
+```
+
+
+
+
+```{r}
+
+k <- 3
+res_cal <- rbind(
+
+  # Value, confidence interval and test for calibration intercept
+  "Intercept" = with(
+    summary(fit_cal_int)$mean,
+    c(
+      "estimate" = estimate,
+      `2.5 %` = estimate - qnorm(0.975) * san.se,
+      `97.5 %` = estimate + qnorm(0.975) * san.se
+    )
+  ),
+
+  # Value, confidence interval and test for calibration slope
+  "Slope" = with(
+    summary(fit_cal_slope)$mean["cll_pred", ],
+    c(
+      "estimate" = 1 + estimate,
+      `2.5 %` = 1 + (estimate - qnorm(0.975) * san.se),
+      `97.5 %` = 1 + (estimate + qnorm(0.975) * san.se)
+    )
+  )
+)
+
+res_cal_2years <- round(res_cal, k)
+
+write.csv(res_cal_2years,"res_cal_2years.csv")
+res_cal_2years
+
+
+```
+
+
+##### 5 years
+
+```{r}
+
+start_time = Sys.time()
+
+# Calibration plot (pseudo-obs approach) ----------------------------------
+# First compute riskRegression::Score()
+
+# vdata <- x %>% 
+#   dplyr::select(patient_id, score_5yrs_Model2, time1,status1) 
+# 
+# names(vdata)=c("ID","score","time","status")
+
+primary_event <- 1
+
+# Add estimated risk and complementary log-log of it to dataset
+# vdata$pred <- vdata$score
+horizon <- 5
+# pred <- as.matrix(vdata$pred)
+
+vdata = kfre_uk2
+
+score_vdata <- riskRegression::Score(
+  list("KFRE_validation" = model2),
+  formula = Hist(time1, status1) ~ 1,
+  cens.model = "km",
+  data = vdata,
+  conf.int = TRUE,
+  times = horizon,
+  #  metrics = c("auc", "brier"),
+  summary = c("ipa"),
+  cause = primary_event,
+  plots = "calibration"
+)
+
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+pseudos <- pseudos[order(pseudos$risk), ]
+
+
+pseudos = list(pseudos)
+smooth_pseudos = mclapply(pseudos, function(x){
+  smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = x,  span=0.33, degree = 1), se = F)
+},mc.cores = 69)
+# Use linear loess (weighted local regression with polynomial span=0.25, degree = 1) smoothing
+#smooth_pseudos <- predict(stats::loess(pseudovalue ~ risk, data = pseudos,span = 0.25, span=0.25, degree = 1), se = F)
+
+smooth_pseudos1 = data.frame(smooth_pseudos[[1]])
+names(smooth_pseudos1)=c("smooth_pseudos")
+pseudos = pseudos[[1]]
+
+pseudo_vals_overall <- data.frame(
+  obs = smooth_pseudos1$smooth_pseudos, 
+  risk = pseudos$risk,
+  Category = "Overall")
+
+Sys.time()-start_time
+
+```
+
+
+###### Plot
+
+```{r}
+
+pdf("PseudoCal_5yearModel2.pdf")
+
+pseudo_vals_overall %>%
+  ggplot(aes(x = risk, y = obs)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2) +
+  geom_line() +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions") -> p1
+
+
+print(p1)
+dev.off()
+
+five_year_cal_data = pseudo_vals_overall
+
+```
+
+###### Intercept and slope
+
+```{r}
+
+## Calibration intercept and slope --------------------------------------
+# Use pseudo-observations calculated by Score() (can alternatively use pseudo::pseudoci)
+pseudos <- data.frame(score_vdata$Calibration$plotframe)
+
+# Note:
+# - 'pseudos' is the data.frame with ACTUAL pseudo-observations, not the smoothed ones
+# - Column ID is not the id in vdata; it is just a number assigned to each row of
+# the original validation data sorted by time and event indicator
+pseudos$cll_pred <- log(-log(1 - pseudos$risk)) # add the cloglog risk ests
+
+# Fit model for calibration intercept
+fit_cal_int <- geese(
+  pseudovalue ~ offset(cll_pred),
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Fit model for calibration slope
+fit_cal_slope <- geese(
+  pseudovalue ~ offset(cll_pred) + cll_pred,
+  data = pseudos,
+  id = ID,
+  scale.fix = TRUE,
+  family = gaussian,
+  mean.link = "cloglog",
+  corstr = "independence",
+  jack = TRUE
+)
+
+# Perform joint test on intercept and slope
+betas <- fit_cal_slope$beta
+vcov_mat <- fit_cal_slope$vbeta
+wald <- drop(betas %*% solve(vcov_mat) %*% betas)
+# pchisq(wald, df = 2, lower.tail = FALSE)
+```
+
+
+
+
+```{r}
+
+k <- 3
+res_cal <- rbind(
+
+  # Value, confidence interval and test for calibration intercept
+  "Intercept" = with(
+    summary(fit_cal_int)$mean,
+    c(
+      "estimate" = estimate,
+      `2.5 %` = estimate - qnorm(0.975) * san.se,
+      `97.5 %` = estimate + qnorm(0.975) * san.se
+    )
+  ),
+
+  # Value, confidence interval and test for calibration slope
+  "Slope" = with(
+    summary(fit_cal_slope)$mean["cll_pred", ],
+    c(
+      "estimate" = 1 + estimate,
+      `2.5 %` = 1 + (estimate - qnorm(0.975) * san.se),
+      `97.5 %` = 1 + (estimate + qnorm(0.975) * san.se)
+    )
+  )
+)
+res_cal_5years <- round(res_cal, k)
+
+write.csv(res_cal_5years,"res_cal_5years.csv")
+
+res_cal_5years
+
+```
+
+
+#### Combined calibration plot 
+
+##### All predicted and observed risk
+
+```{r}
+
+two_year_cal_data$Time = "2 years"
+two_year_cal_data$Model = "Model2"
+
+five_year_cal_data$Time = "5 years"
+five_year_cal_data$Model = "Model2"
+
+Model2_cal_plot_data = rbind(two_year_cal_data,five_year_cal_data)
+
+saveRDS(Model2_cal_plot_data,"Model2_cal_plot_data_pseudo_values.rds")
+
+
+p1=ggplot(Model2_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50))
+
+
+ggsave(p1,filename = "Model2_Combined_Plots.jpeg",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "Model2_Combined_Plots.pdf",width = 35,height = 15, dpi=300)
+
+```
+
+
+##### Restricted to predicted and observed risk below 0.5
+
+```{r}
+
+p1=ggplot(Model2_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.1), limits = c(0, 0.5)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.1), limits = c(0, 0.5)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50))
+
+
+ggsave(p1,filename = "Model2_Combined_Plots_Restricted.jpeg",width = 35,height = 15, dpi=300)
+
+ggsave(p1,filename = "Model2_Combined_Plots_Restricted.pdf",width = 35,height = 15, dpi=300)
+
+```
+
+##### Restricted to predicted and observed risk below 0.1
+
+```{r}
+
+p1=ggplot(Model2_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.05), limits = c(0, 0.1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.05), limits = c(0, 0.1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed outcome proportions")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50))
+
+
+ggsave(p1,filename = "Model2_Combined_Plots_Restricted2.jpeg",width = 35,height = 15, dpi=300)
+
+ggsave(p1,filename = "Model2_Combined_Plots_Restricted2.pdf",width = 35,height = 15, dpi=300)
+
+```
+
+
+#### Combined calibration slope and Intercept
+
+```{r}
+
+res_cal_5years = data.frame(res_cal_5years)
+res_cal_5years = rownames_to_column(res_cal_5years, var = "Metric")
+res_cal_5years$Time = "5 years"
+res_cal_5years$Model = "Model2"
+
+res_cal_2years = data.frame(res_cal_2years)
+res_cal_2years = rownames_to_column(res_cal_2years, var = "Metric")
+res_cal_2years$Time = "2 years"
+res_cal_2years$Model = "Model2"
+
+cal_metrics_Model2 = rbind(res_cal_5years,res_cal_2years)
+
+cal_metrics_Model2$"Metric estimate (95% CI)" = ifelse(is.na(cal_metrics_Model2$estimate), "",
+                             sprintf("%.3f (%.3f to %.3f)",
+                                     cal_metrics_Model2$estimate, cal_metrics_Model2$X2.5.., cal_metrics_Model2$X97.5..))
+
+cal_metrics_Model2 = cal_metrics_Model2[,c(1,5:7)]
+saveRDS(cal_metrics_Model2,"Calibration_summary_stats_Model2.rds")
+
+```
+
+
+```{r}
+Sys.time()-start_time0
+```
+
+
+## 5. Combine calibration plots  all models
+
+```{r}
+
+benchmark_cal_data = readRDS("benchmark_cal_plot_data_pseudo_values.rds")
+Model1_cal_data = readRDS("Model1_cal_plot_data_pseudo_values.rds")
+Model2_cal_data = readRDS("Model2_cal_plot_data_pseudo_values.rds")
+
+combined_cal_data = rbind(benchmark_cal_data,Model1_cal_data,Model2_cal_data)
+
+combined_cal_data = combined_cal_data %>% dplyr::mutate(
+  
+  Model2 = recode(Model, "Benchmark"="Benchmark","Model1"="Model 1","Model2"="Model 2"),
+  
+  Model = factor(Model2,levels = c("Benchmark","Model 1","Model 2"))
+)
+
+```
+
+
+### Benchmark only
+
+#### 2 years full+restricted
+
+```{r}
+
+benchmark_only = subset(combined_cal_data,combined_cal_data$Model=="Benchmark")
+
+p1=ggplot(benchmark_only,aes(x = risk, y = obs,color=Time)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed probabilities")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50), legend.position = "blank")
+
+plot_2yrs_full = p1
+  
+ggsave(p1,filename = "Benchmark_Full.jpeg",width = 20,height = 15, dpi=300)
+
+ggsave(p1,filename = "Benchmark_Full.pdf",width = 20,height = 15, dpi=300)
+
+```
+
+
+
+```{r}
+
+benchmark_only_2yr = subset(benchmark_only,benchmark_only$Time=="2 years")
+
+two_yr_plot=ggplot(benchmark_only_2yr,aes(x = risk, y = obs,color=Time)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed probabilities")+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50), legend.position = "blank")
+
+
+
+ggsave(two_yr_plot,filename = "Benchmark_Two_Year_Only_Full.jpeg",width = 20,height = 15, dpi=300)
+
+
+benchmark_only_5yr = subset(benchmark_only,benchmark_only$Time=="5 years")
+
+five_yr_plot=ggplot(benchmark_only_5yr,aes(x = risk, y = obs,color=Time)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3,colour = "#00BFC4") +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed probabilities")+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50), legend.position = "blank")
+
+
+
+ggsave(five_yr_plot,filename = "Benchmark_Five_Year_Only_Full.jpeg",width = 20,height = 15, dpi=300)
+
+library(patchwork)
+
+version1 = (two_yr_plot + labs(title = "2 years"))+(five_yr_plot + labs(title = "5 years"))
+
+ggsave(version1,filename = "Benchmark_Full.jpeg",width = 45,height = 20, dpi=300)
+
+
+```
+
+
+#### 2 and 5 year Restricted
+
+```{r}
+
+benchmark_only_2yr = subset(benchmark_only,benchmark_only$Time=="2 years")
+
+two_yr_plot=ggplot(benchmark_only_2yr,aes(x = risk, y = obs,color=Time)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 0.5, 0.1), limits = c(0, 0.5)) +
+  scale_x_continuous(breaks = seq(0, 0.5, 0.1), limits = c(0, 0.5)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed probabilities")+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50), legend.position = "blank")
+
+
+
+ggsave(two_yr_plot,filename = "Benchmark_Two_Year_Only.jpeg",width = 20,height = 15, dpi=300)
+
+
+benchmark_only_5yr = subset(benchmark_only,benchmark_only$Time=="5 years")
+
+five_yr_plot=ggplot(benchmark_only_5yr,aes(x = risk, y = obs,color=Time)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3,colour = "#00BFC4") +
+  scale_y_continuous(breaks = seq(0, 0.1, 0.05), limits = c(0, 0.1)) +
+  scale_x_continuous(breaks = seq(0, 0.1, 0.05), limits = c(0, 0.1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed probabilities")+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50), legend.position = "blank")
+
+
+
+ggsave(five_yr_plot,filename = "Benchmark_Five_Year_Only.jpeg",width = 20,height = 15, dpi=300)
+
+library(patchwork)
+
+version1 = (two_yr_plot + labs(title = "2 years"))+(five_yr_plot + labs(title = "5 years"))
+
+ggsave(version1,filename = "Benchmark_Restricted.jpeg",width = 45,height = 20, dpi=300)
+
+
+
+```
+
+
+### 2 years
+
+#### All predicted and observed risks
+
+```{r}
+
+combined_cal_data_2yrs = subset(combined_cal_data,combined_cal_data$Time=="2 years")
+
+p1=ggplot(combined_cal_data_2yrs,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed probabilities")+
+  facet_wrap(~Model)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50), legend.position = "blank")
+
+plot_2yrs_full = p1
+  
+ggsave(p1,filename = "Final_Combined_2years_Plots.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p1,filename = "Final_Combined_2years_Plots.pdf",width = 45,height = 20, dpi=300)
+
+
+```
+
+#### Restrict to 0.5
+
+```{r}
+p1=ggplot(combined_cal_data_2yrs,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 0.5, 0.1), limits = c(0, 0.5)) +
+  scale_x_continuous(breaks = seq(0, 0.5, 0.1), limits = c(0, 0.5)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed probabilities")+
+  facet_wrap(~Model)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50), legend.position = "blank")
+
+plot_2yrs_restricted = p1
+
+ggsave(p1,filename = "Final_Combined_2years_PlotsRestricted.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p1,filename = "Final_Combined_2years_PlotsRestricted.pdf",width = 45,height = 20, dpi=300)
+
+```
+
+
+
+### 2 years and 5 years - Version 2
+
+```{r}
+
+#2 years and five years complete plot
+combined_cal_data$Time2 = ifelse(combined_cal_data$Time=="2 years","2 years (Full plot)","5 years (Full plot)")
+#2 years and five years Restricted to 0.1 for 5 year model and 0.5 for 2 year model
+two_year_restricted = subset(combined_cal_data,combined_cal_data$Time=="2 years")
+two_year_restricted = subset(two_year_restricted,two_year_restricted$obs<=0.5)
+two_year_restricted = subset(two_year_restricted,two_year_restricted$risk<=0.5)
+
+five_year_restricted = subset(combined_cal_data,combined_cal_data$Time=="5 years")
+five_year_restricted = subset(five_year_restricted,five_year_restricted$obs<=0.1)
+five_year_restricted = subset(five_year_restricted,five_year_restricted$risk<=0.1)
+
+combined_cal_data_restricted = rbind(two_year_restricted,five_year_restricted)
+combined_cal_data_restricted$Time2 = ifelse(combined_cal_data_restricted$Time=="2 years","2 years (Restricted plot)","5 years (Restricted plot)")
+
+figure_5_data  = rbind(combined_cal_data,combined_cal_data_restricted)
+figure_5_data$Time2 = factor(figure_5_data$Time2,levels = c("2 years (Full plot)","2 years (Restricted plot)",
+                                                            "5 years (Full plot)","5 years (Restricted plot)"))
+
+```
+
+
+#### 2 year full + restricted
+
+```{r}
+
+figure_5_data1 = subset(figure_5_data,figure_5_data$Time2=="2 years (Full plot)")
+
+p1=ggplot(figure_5_data1,aes(x = risk, y = obs,group=Model, color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed probabilities")+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=90, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50), legend.position = "blank")
+  
+ggsave(p1,filename = "Figure_5a.jpeg",width = 45,height = 20, dpi=300)
+
+
+figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="2 years (Restricted plot)")
+p2=ggplot(figure_5_data2,aes(x = risk, y = obs,group=Model, color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 0.5, 0.1), limits = c(0, 0.5)) +
+  scale_x_continuous(breaks = seq(0, 0.5, 0.1), limits = c(0, 0.5)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed probabilities")+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=90, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50), legend.justification = c(1, 1))
+  
+ggsave(p2,filename = "Figure_5b.jpeg",width = 45,height = 20, dpi=300)
+
+library(patchwork)
+
+version1 = (p1 + labs(title = "2 years (Full plot)"))+(p2 + labs(title = "2 years (Restricted plot)"))
+
+ggsave(version1,filename = "Figure_5ab.jpeg",width = 45,height = 20, dpi=300)
+
+```
+
+#### 5 year full + restricted
+
+```{r}
+
+figure_5_data1 = subset(figure_5_data,figure_5_data$Time2=="5 years (Full plot)")
+
+p3=ggplot(figure_5_data1,aes(x = risk, y = obs,group=Model, color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed probabilities")+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=90, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50), legend.position = "blank")
+  
+ggsave(p3,filename = "Figure_5c.jpeg",width = 45,height = 20, dpi=300)
+
+
+figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="5 years (Restricted plot)")
+p4=ggplot(figure_5_data2,aes(x = risk, y = obs,group=Model, color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 0.1, 0.05), limits = c(0, 0.1)) +
+  scale_x_continuous(breaks = seq(0, 0.1, 0.05), limits = c(0, 0.1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed probabilities")+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=90, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50), legend.justification = c(1, 1))
+  
+ggsave(p4,filename = "Figure_5d.jpeg",width = 45,height = 20, dpi=300)
+
+library(patchwork)
+
+version1 = (p3 + labs(title = "5 years (Full plot)"))+(p4 + labs(title = "5 years (Restricted plot)"))
+
+ggsave(version1,filename = "Figure_5cd.jpeg",width = 45,height = 20, dpi=300)
+
+
+```
+
+##### Combine Figure 5
+
+```{r}
+
+version1 = ((p1 + labs(title = "2 years (Full plot)") + xlab(""))+(p2 + labs(title = "2 years (Restricted plot)")+ xlab("") + ylab("")))/ ((p3 + labs(title = "5 years (Full plot)"))+(p4 + labs(title = "5 years (Restricted plot)") + theme(legend.position = "blank") + ylab("")))
+
+ggsave(version1,filename = "Figure_5_Final.jpeg",width = 45,height = 42.8, dpi=300)
+
+```
+
+
+### 2 years and 5 years - Greyscale colors
+
+#### 2 year full + restricted
+
+```{r}
+
+figure_5_data1 = subset(figure_5_data,figure_5_data$Time2=="2 years (Full plot)")
+
+ideal_line_df <- data.frame(
+  slope = 1,
+  intercept = 0,
+  label = "Reference"
+)
+
+p1 = ggplot(figure_5_data1, aes(
+  x = risk,
+  y = obs,
+  group = Model,
+  color = Model,
+  linetype = Model
+))  +
+  geom_abline(
+    data = ideal_line_df,
+    aes(slope = slope, intercept = intercept,
+        color = label, linetype = label),
+    linewidth = 3,
+    key_glyph = ggplot2::draw_key_path   # <- makes legend line horizontal
+  ) +
+  geom_line(linewidth = 5) +
+  scale_y_continuous(breaks = seq(0,1,0.2), limits = c(0,1)) +
+  scale_x_continuous(breaks = seq(0,1,0.2), limits = c(0,1)) +
+  scale_color_manual(
+    values = c("Reference"="red","Benchmark"="#4D4D4D","Model 1"="#56B4E9","Model 2"="#E69F00"),
+    breaks = c("Reference","Benchmark","Model 1","Model 2")
+  ) +
+  scale_linetype_manual(
+    values = c("Reference"="dashed","Benchmark"="dashed","Model 1"="dotdash","Model 2"="solid"),
+    breaks = c("Reference","Benchmark","Model 1","Model 2")
+  ) +
+  guides(
+    color = guide_legend(order = 1),
+    linetype = guide_legend(order = 1)
+  ) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 50, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 50, face = "bold"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1, size = 50),
+    axis.text.y = element_text(size = 50),
+    axis.text = element_text(size = 50),
+    legend.title = element_text(size = 45, face = "bold"),
+    legend.text = element_text(size = 40),
+    legend.position = "blank"
+  )
+
+
+ggsave(p1,filename = "Figure_5a_V2.jpeg",width = 45,height = 20, dpi=300)
+
+
+figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="2 years (Restricted plot)")
+
+p2 = ggplot(figure_5_data2, aes(
+  x = risk,
+  y = obs,
+  group = Model,
+  color = Model,
+  linetype = Model
+)) +
+  geom_abline(
+    data = ideal_line_df,
+    aes(slope = slope, intercept = intercept,
+        color = label, linetype = label),
+    linewidth = 3,
+    key_glyph = ggplot2::draw_key_path
+  ) +
+  geom_line(linewidth = 5) +
+  scale_y_continuous(breaks = seq(0, 0.5, 0.1), limits = c(0, 0.5)) +
+  scale_x_continuous(breaks = seq(0, 0.5, 0.1), limits = c(0, 0.5)) +
+  xlab("Predicted probabilities") + ylab("Observed probabilities") +
+  theme_bw() +
+  scale_color_manual(
+    values = c(
+      "Reference" = "red",
+      "Benchmark"  = "#4D4D4D",
+      "Model 1"    = "#56B4E9",
+      "Model 2"    = "#E69F00"
+    ),
+    breaks = c("Reference","Benchmark","Model 1","Model 2")
+  ) +
+  scale_linetype_manual(
+    values = c(
+      "Reference" = "dashed",  # <- use character, not 2
+      "Benchmark"  = "dashed",
+      "Model 1"    = "dotdash",
+      "Model 2"    = "solid"
+    ),
+    breaks = c("Reference","Benchmark","Model 1","Model 2")
+  ) +
+  guides(
+    color = guide_legend(order = 1),
+    linetype = guide_legend(order = 1)
+  )  +
+  theme(
+    text = element_text(size = 50, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 50, face = "bold"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1, size = 50),
+    axis.text.y = element_text(size = 50),
+    axis.text = element_text(size = 50),
+    legend.title = element_text(size = 45, face = "bold"),
+    legend.text = element_text(size = 40),
+    legend.justification = c(1, 1),
+    legend.key.width = unit(6, "cm") # change to "none" if you really want to hide it
+  )
+
+  
+ggsave(p2,filename = "Figure_5b_V2.jpeg",width = 45,height = 20, dpi=300)
+
+library(patchwork)
+
+version1 = (p1 + labs(title = "2 years (Full plot)"))+(p2 + labs(title = "2 years (Restricted plot)"))
+
+ggsave(version1,filename = "Figure_5ab_V2.jpeg",width = 45,height = 20, dpi=300)
+
+```
+
+#### 5 year full + restricted
+
+```{r}
+
+figure_5_data1 = subset(figure_5_data,figure_5_data$Time2=="5 years (Full plot)")
+
+p3 = ggplot(figure_5_data1, aes(
+  x = risk,
+  y = obs,
+  group = Model,
+  color = Model,
+  linetype = Model
+)) +
+  geom_abline(
+    data = ideal_line_df,
+    aes(slope = slope, intercept = intercept,
+        color = label, linetype = label),
+    linewidth = 3,
+    key_glyph = ggplot2::draw_key_path   # <- makes legend line horizontal
+  ) +
+  geom_line(linewidth = 5) +
+  scale_y_continuous(breaks = seq(0,1,0.2), limits = c(0,1)) +
+  scale_x_continuous(breaks = seq(0,1,0.2), limits = c(0,1)) +
+  scale_color_manual(
+    values = c("Reference"="red","Benchmark"="#4D4D4D","Model 1"="#56B4E9","Model 2"="#E69F00"),
+    breaks = c("Reference","Benchmark","Model 1","Model 2")
+  ) +
+  scale_linetype_manual(
+    values = c("Reference"="dashed","Benchmark"="dashed","Model 1"="dotdash","Model 2"="solid"),
+    breaks = c("Reference","Benchmark","Model 1","Model 2")
+  ) +
+  guides(
+    color = guide_legend(order = 1),
+    linetype = guide_legend(order = 1)
+  ) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 50, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 50, face = "bold"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1, size = 50),
+    axis.text.y = element_text(size = 50),
+    axis.text = element_text(size = 50),
+    legend.title = element_text(size = 45, face = "bold"),
+    legend.text = element_text(size = 40),
+    legend.position = "blank"  # change to "none" if you really want to hide it
+  )
+
+  
+ggsave(p3,filename = "Figure_5c_V2.jpeg",width = 45,height = 20, dpi=300)
+
+
+figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="5 years (Restricted plot)")
+
+p4 = ggplot(figure_5_data2, aes(
+  x = risk,
+  y = obs,
+  group = Model,
+  color = Model,
+  linetype = Model
+))+
+  geom_abline(
+    data = ideal_line_df,
+    aes(slope = slope, intercept = intercept,
+        color = label, linetype = label),
+    linewidth = 3,
+    key_glyph = ggplot2::draw_key_path   # <- makes legend line horizontal
+  ) +
+  geom_line(linewidth = 5) +
+  scale_y_continuous(breaks = seq(0, 0.1, 0.05), limits = c(0, 0.1)) +
+  scale_x_continuous(breaks = seq(0, 0.1, 0.05), limits = c(0, 0.1)) +
+  scale_color_manual(
+    values = c("Reference"="red","Benchmark"="#4D4D4D","Model 1"="#56B4E9","Model 2"="#E69F00"),
+    breaks = c("Reference","Benchmark","Model 1","Model 2")
+  ) +
+  scale_linetype_manual(
+    values = c("Reference"="dashed","Benchmark"="dashed","Model 1"="dotdash","Model 2"="solid"),
+    breaks = c("Reference","Benchmark","Model 1","Model 2")
+  ) +
+  guides(
+    color = guide_legend(order = 1),
+    linetype = guide_legend(order = 1)
+  ) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 50, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 50, face = "bold"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1, size = 50),
+    axis.text.y = element_text(size = 50),
+    axis.text = element_text(size = 50),
+    legend.title = element_text(size = 45, face = "bold"),
+    legend.text = element_text(size = 40),
+    legend.justification = c(1, 1),
+    legend.key.width = unit(6, "cm") # change to "none" if you really want to hide it
+  )
+
+ggsave(p4,filename = "Figure_5d_V2.jpeg",width = 45,height = 20, dpi=300)
+
+library(patchwork)
+
+version1 = (p3 + labs(title = "5 years (Full plot)"))+(p4 + labs(title = "5 years (Restricted plot)"))
+
+ggsave(version1,filename = "Figure_5cd_V2.jpeg",width = 45,height = 20, dpi=300)
+
+
+```
+
+##### Combine Figure 5
+
+```{r}
+
+version1 = ((p1 + labs(title = "2 years (Full plot)") + xlab("") + ylab("Observed probabilities"))+(p2 + labs(title = "2 years (Restricted plot)")+ xlab("") + ylab("")))/ ((p3 + labs(title = "5 years (Full plot)")+ xlab("Predicted probabilities") + ylab("Observed probabilities"))+(p4 + labs(title = "5 years (Restricted plot)") + theme(legend.position = "blank") + ylab("") + xlab("Predicted probabilities")))
+
+ggsave(version1,filename = "Figure_5_Final_V2.jpeg",width = 47,height = 42.8, dpi=300)
+
+
+```
+
+
+#### 2 year full + restricted (Benchmark)
+
+```{r}
+
+figure_5_data1 = subset(figure_5_data,figure_5_data$Time2=="2 years (Full plot)" & figure_5_data$Model=="Benchmark")
+
+ideal_line_df <- data.frame(
+  slope = 1,
+  intercept = 0,
+  label = "Reference"
+)
+
+p1 = ggplot(figure_5_data1, aes(
+  x = risk,
+  y = obs,
+  group = Model,
+  color = Model,
+  linetype = Model
+))  +
+  geom_abline(
+    data = ideal_line_df,
+    aes(slope = slope, intercept = intercept,
+        color = label, linetype = label),
+    linewidth = 3,
+    key_glyph = ggplot2::draw_key_path   # <- makes legend line horizontal
+  ) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0,1,0.2), limits = c(0,1)) +
+  scale_x_continuous(breaks = seq(0,1,0.2), limits = c(0,1)) +
+  scale_color_manual(
+    values = c("Reference"="red","Benchmark"="#56B4E9"),
+    breaks = c("Reference","Benchmark")
+  ) +
+  scale_linetype_manual(
+    values = c("Reference"="dashed","Benchmark"="solid"),
+    breaks = c("Reference","Benchmark")
+  ) +
+  guides(
+    color = guide_legend(order = 1),
+    linetype = guide_legend(order = 1)
+  ) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 50, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 50, face = "bold"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1, size = 50),
+    axis.text.y = element_text(size = 50),
+    axis.text = element_text(size = 50),
+    legend.title = element_text(size = 45, face = "bold"),
+    legend.text = element_text(size = 40),
+    legend.position = "blank"
+  )
+
+
+ggsave(p1,filename = "Figure_5a_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
+
+
+figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="2 years (Restricted plot)" & figure_5_data$Model=="Benchmark")
+
+p2 = ggplot(figure_5_data2, aes(
+  x = risk,
+  y = obs,
+  group = Model,
+  color = Model,
+  linetype = Model
+)) +
+  geom_abline(
+    data = ideal_line_df,
+    aes(slope = slope, intercept = intercept,
+        color = label, linetype = label),
+    linewidth = 3,
+    key_glyph = ggplot2::draw_key_path
+  ) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 0.5, 0.1), limits = c(0, 0.5)) +
+  scale_x_continuous(breaks = seq(0, 0.5, 0.1), limits = c(0, 0.5)) +
+  xlab("Predicted probabilities") + ylab("Observed probabilities") +
+  theme_bw() +
+  scale_color_manual(
+    values = c(
+      "Reference" = "red",
+      "Benchmark"  = "#56B4E9"
+    ),
+    breaks = c("Reference","Benchmark")
+  ) +
+  scale_linetype_manual(
+    values = c(
+      "Reference" = "dashed",  # <- use character, not 2
+      "Benchmark"  = "solid"
+    ),
+    breaks = c("Reference","Benchmark")
+  ) +
+  guides(
+    color = guide_legend(order = 1),
+    linetype = guide_legend(order = 1)
+  )  +
+  theme(
+    text = element_text(size = 50, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 50, face = "bold"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1, size = 50),
+    axis.text.y = element_text(size = 50),
+    axis.text = element_text(size = 50),
+    legend.title = element_text(size = 45, face = "bold"),
+    legend.text = element_text(size = 40),
+    legend.justification = c(1, 1),
+    legend.key.width = unit(6, "cm") # change to "none" if you really want to hide it
+  )
+
+  
+ggsave(p2,filename = "Figure_5b_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
+
+library(patchwork)
+
+version1 = (p1 + labs(title = "2 years (Full plot)"))+(p2 + labs(title = "2 years (Restricted plot)"))
+
+ggsave(version1,filename = "Figure_5ab_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
+
+```
+
+#### 5 year full + restricted (Benchmark)
+
+```{r}
+
+figure_5_data1 = subset(figure_5_data,figure_5_data$Time2=="5 years (Full plot)" & figure_5_data$Model=="Benchmark")
+
+p3 = ggplot(figure_5_data1, aes(
+  x = risk,
+  y = obs,
+  group = Model,
+  color = Model,
+  linetype = Model
+)) +
+  geom_abline(
+    data = ideal_line_df,
+    aes(slope = slope, intercept = intercept,
+        color = label, linetype = label),
+    linewidth = 3,
+    key_glyph = ggplot2::draw_key_path   # <- makes legend line horizontal
+  ) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0,1,0.2), limits = c(0,1)) +
+  scale_x_continuous(breaks = seq(0,1,0.2), limits = c(0,1)) +
+  scale_color_manual(
+    values = c("Reference"="red","Benchmark"="#56B4E9"),
+    breaks = c("Reference","Benchmark")
+  ) +
+  scale_linetype_manual(
+    values = c("Reference"="dashed","Benchmark"="solid"),
+    breaks = c("Reference","Benchmark")
+  ) +
+  guides(
+    color = guide_legend(order = 1),
+    linetype = guide_legend(order = 1)
+  ) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 50, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 50, face = "bold"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1, size = 50),
+    axis.text.y = element_text(size = 50),
+    axis.text = element_text(size = 50),
+    legend.title = element_text(size = 45, face = "bold"),
+    legend.text = element_text(size = 40),
+    legend.position = "blank"  # change to "none" if you really want to hide it
+  )
+
+  
+ggsave(p3,filename = "Figure_5c_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
+
+
+figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="5 years (Restricted plot)" & figure_5_data$Model=="Benchmark")
+
+p4 = ggplot(figure_5_data2, aes(
+  x = risk,
+  y = obs,
+  group = Model,
+  color = Model,
+  linetype = Model
+))+
+  geom_abline(
+    data = ideal_line_df,
+    aes(slope = slope, intercept = intercept,
+        color = label, linetype = label),
+    linewidth = 3,
+    key_glyph = ggplot2::draw_key_path   # <- makes legend line horizontal
+  ) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 0.1, 0.05), limits = c(0, 0.1)) +
+  scale_x_continuous(breaks = seq(0, 0.1, 0.05), limits = c(0, 0.1)) +
+  scale_color_manual(
+    values = c("Reference"="red","Benchmark"="#56B4E9"),
+    breaks = c("Reference","Benchmark")
+  ) +
+  scale_linetype_manual(
+    values = c("Reference"="dashed","Benchmark"="solid"),
+    breaks = c("Reference","Benchmark")
+  ) +
+  guides(
+    color = guide_legend(order = 1),
+    linetype = guide_legend(order = 1)
+  ) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 50, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 50, face = "bold"),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1, size = 50),
+    axis.text.y = element_text(size = 50),
+    axis.text = element_text(size = 50),
+    legend.title = element_text(size = 45, face = "bold"),
+    legend.text = element_text(size = 40),
+    legend.justification = c(1, 1),
+    legend.key.width = unit(6, "cm") # change to "none" if you really want to hide it
+  )
+
+ggsave(p4,filename = "Figure_5d_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
+
+library(patchwork)
+
+version1 = (p3 + labs(title = "5 years (Full plot)"))+(p4 + labs(title = "5 years (Restricted plot)"))
+
+ggsave(version1,filename = "Figure_5cd_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
+
+
+```
+
+##### Combine Figure 5
+
+```{r}
+
+version1 = ((p1 + labs(title = "2 years (Full plot)") + xlab("") + ylab("Observed probabilities"))+(p2 + labs(title = "2 years (Restricted plot)")+ xlab("") + ylab("")))/ ((p3 + labs(title = "5 years (Full plot)")+ xlab("Predicted probabilities") + ylab("Observed probabilities"))+(p4 + labs(title = "5 years (Restricted plot)") + theme(legend.position = "blank") + ylab("") + xlab("Predicted probabilities")))
+
+ggsave(version1,filename = "Figure_5_Final_V2_Benchmark.jpeg",width = 47,height = 42.8, dpi=300)
+
+
+```
+
+
+### 5 years
+
+#### All predicted and observed risks
+
+```{r}
+
+combined_cal_data_5yrs = subset(combined_cal_data,combined_cal_data$Time=="5 years")
+
+p1=ggplot(combined_cal_data_5yrs,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed probabilities")+
+  facet_wrap(~Model)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50), legend.position = "blank")
+
+plot_5yrs_full = p1
+
+
+ggsave(p1,filename = "Final_Combined_5years_Plots.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p1,filename = "Final_Combined_5years_Plots.pdf",width = 45,height = 20, dpi=300)
+
+```
+
+#### Restricted to 0.1
+
+```{r}
+
+p1=ggplot(combined_cal_data_5yrs,aes(x = risk, y = obs,color=Model)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 0.1, 0.05), limits = c(0, 0.1)) +
+  scale_x_continuous(breaks = seq(0, 0.1, 0.05), limits = c(0, 0.1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed probabilities")+
+  facet_wrap(~Model)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50), legend.position = "blank")
+
+plot_5yrs_restricted = p1
+
+ggsave(p1,filename = "Final_Combined_5years_PlotsRestricted.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p1,filename = "Final_Combined_5years_PlotsRestricted.pdf",width = 45,height = 20, dpi=300)
+
+
+```
+
+
+
+### Combine 2 and 5 years plots
+
+#### Full
+
+```{r}
+
+library(cowplot)
+library(patchwork)
+
+
+version1 = (plot_2yrs_full + theme(axis.title.x = element_blank()) + labs(title = "2 years"))/(plot_5yrs_full + labs(title = "5 years"))
+
+ggsave(version1,filename = "Final_Full_Plots.jpeg",width = 49,height = 35, dpi=300)
+
+
+# version2 = plot_grid(plot_2yrs_full + theme(axis.title.x = element_blank()),plot_5yrs_full,nrow = 2,labels = c("2 year model","5 year model"),label_size = 50,label_fontface = "bold",label_x = 0.02, label_y = 0.98) 
+# 
+# ggsave(version2,filename = "Final_Full_PlotsV2.jpeg",width = 49,height = 35, dpi=300)
+
+
+```
+
+
+
+#### Restricted
+
+```{r}
+
+version1 = (plot_2yrs_restricted + theme(axis.title.x = element_blank()) + labs(title = "2 years"))/(plot_5yrs_restricted + labs(title = "5 years"))
+
+ggsave(version1,filename = "Final_Restricteda_Plots.jpeg",width = 49,height = 35, dpi=300)
+
+```
+
+
+### Combine 2 and 5 years Benchmark only plots
+
+#### Full
+
+```{r}
+combined_cal_data_benchmark = filter(combined_cal_data,Model2 %in% c("Benchmark"))
+
+p1=ggplot(combined_cal_data_benchmark,aes(x = risk, y = obs,color=Time)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed probabilities")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50), legend.position = "blank")
+
+ggsave(p1,filename = "Full_Benchmark_Only_Plots.jpeg",width = 49,height = 25, dpi=300)
+
+```
+
+
+#### Restricted
+
+```{r}
+
+p1=ggplot(combined_cal_data_benchmark,aes(x = risk, y = obs,color=Time)) +
+  # geom_ribbon(aes(ymin = ll, ymax = ul), fill = "grey90") +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = 2, linewidth = 3) +
+  geom_line(linewidth = 3) +
+  scale_y_continuous(breaks = seq(0, 0.5, 0.1), limits = c(0, 0.5)) +
+  scale_x_continuous(breaks = seq(0, 0.5, 0.1), limits = c(0, 0.5)) +
+  theme_bw() +
+  xlab("Predicted probabilities") +
+  ylab("Observed probabilities")+
+  facet_wrap(~Time)+
+  theme(text = element_text(size=50,face="bold",hjust = 0.5),
+        axis.title=element_text(size=50,face="bold"),
+        axis.text.x = element_text(angle=45, hjust=1,vjust = 1,size = 50),
+        axis.text.y = element_text(size = 50),
+        axis.text=element_text(size=50), legend.position = "blank")
+
+ggsave(p1,filename = "Restricted_Benchmark_Only_Plots.jpeg",width = 49,height = 25, dpi=300)
+
+
+```
+
+
+
+## 6. Combine calibration slopes and intercept for  all models
+
+```{r}
+
+benchmark_cal_stats = readRDS("Calibration_summary_stats_Benchmark.rds") %>% tidyr::spread("Time","Metric estimate (95% CI)")
+kfre1_cal_stats = readRDS("Calibration_summary_stats_Model1.rds") %>% tidyr::spread("Time","Metric estimate (95% CI)")
+kfre2_cal_stats = readRDS("Calibration_summary_stats_Model2.rds") %>% tidyr::spread("Time","Metric estimate (95% CI)")
+
+cal_stats = rbind(benchmark_cal_stats,kfre1_cal_stats,kfre2_cal_stats)
+
+write.csv(cal_stats,"Calibration_stats_all_models.csv",row.names = F)
+
+```
+
+
+```{r}
+Sys.time()-start_time00
+```
+
