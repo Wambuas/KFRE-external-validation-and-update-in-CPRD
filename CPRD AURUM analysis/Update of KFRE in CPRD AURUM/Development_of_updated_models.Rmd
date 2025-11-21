@@ -1,0 +1,442 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+
+#Start at 5.50 am Tuesday
+
+rm(list = ls())
+
+library(tidyverse)
+library(riskRegression)
+library(plyr)
+#library(tidysurv)
+library(data.table)
+library(stringr)
+library(parallel)
+library(tableone)
+library(muhaz)
+library(survival)
+library(Hmisc)
+library(MASS)
+library(mfp)
+library(reshape2)
+library(flexsurv)
+library(devtools)
+library(prodlim)
+library(rms)
+library(rstpm2)
+library(survcomp)
+library(glmnet)
+library(caret)
+library(sjPlot)
+library(knitr)
+library(webshot)
+library(pROC)
+library(rmda)
+library(pseudo)
+library(lava)
+library(pec)
+library(mice)
+library(miceadds)
+library(haven)
+library(foreign)
+
+
+pacman::p_load(
+  survival,
+  rms,
+  mstate,
+  pseudo,
+  pec,
+  riskRegression,
+  plotrix,
+  knitr,
+  splines,
+  kableExtra,
+  gtsummary,
+  boot,
+  tidyverse,
+  rsample,
+  gridExtra,
+  webshot,
+  riskRegression
+)
+
+```
+
+
+# Data
+
+## Importing data imputed with outcome
+
+```{r}
+load("imputed_data.rda")
+```
+
+
+```{r}
+complete_data=complete(imp.surv, action = "long", include = TRUE)
+
+```
+
+## List of imputed datasets
+
+```{r}
+
+imputed_dataset = subset(complete_data,complete_data$.imp==1) #select first imputation
+imputed_dataset = imputed_dataset %>% dplyr::select(PRACTICE_PATIENT_ID,ACR_value)
+imputed_dataset = imputed_dataset %>% dplyr::rename(acr=ACR_value)
+
+```
+
+
+### Convert ACR back to mg/mmol from log 
+
+```{r}
+imputed_dataset$acr = (exp(imputed_dataset$acr)-0.001)
+```
+
+```{r}
+summary(imputed_dataset$acr)
+```
+
+### Convert to mg/g
+
+```{r}
+imputed_dataset$acr = imputed_dataset$acr*8.84
+```
+
+```{r}
+summary(imputed_dataset$acr)
+```
+
+
+## Preparing data for modelling 
+
+```{r}
+imputed_dataset = imputed_dataset %>% dplyr::rename(eGFR = EGFR2)
+names(imputed_dataset)
+
+imputed_dataset=data.frame(imputed_dataset)
+imputed_dataset = imputed_dataset %>% dplyr::mutate(
+  
+  male = as.integer(ifelse(female=="0",1,0)))
+
+```
+
+
+### Select variables I need
+
+```{r}
+
+imputed_dataset_all_variables = imputed_dataset ##keep a copy with all variables first named "imputed_dataset_all_variables"
+
+imputed_dataset = imputed_dataset %>% dplyr::select(PRACTICE_PATIENT_ID,age,male,eGFR,acr,time,status)
+
+```
+
+
+## Cumulative incidence curve
+
+###  Expand datasets to multistate format
+
+```{r}
+imputed_dataset.w <- crprep(
+  Tstop = "time",
+  status = "status",
+  trans = c(1, 2),
+  id = "PRACTICE_PATIENT_ID",
+  keep = c("age", "male", "diabetic", "eGFR","ethnicity","acr"),
+  data = imputed_dataset
+)
+# Save extended data with weights for kidney failure (failcode=1)
+# and death (failcode=2)
+imputed_dataset.w1 <- imputed_dataset.w %>% filter(failcode == 1)
+imputed_dataset.w2 <- imputed_dataset.w %>% filter(failcode == 2)
+
+```
+
+###  Estimate the cumulative incidence for kidney failure
+
+```{r}
+
+mfit_imputed_dataset <- survfit(
+  Surv(Tstart, Tstop, status == 1) ~ 1,
+  data = imputed_dataset.w1, weights = weight.cens
+)
+```
+
+
+### Plot the cumulative incidence
+
+```{r}
+
+plot(mfit_imputed_dataset,
+  col = 1, lwd = 2,
+  xlab = "Years since CKD diagnosis",
+  ylab = "Cumulative incidence", bty = "n",
+  ylim = c(0, 0.025), xlim = c(0, 10), fun = "event", conf.int = TRUE
+)
+title("")
+
+```
+
+### Cumulative incidence estimates at 2 and 5 years
+
+```{r}
+smfit_imputed_dataset <- summary(mfit_imputed_dataset, times = c(2,5))
+smfit_imputed_dataset
+```
+
+
+```{r}
+smfit_imputed_dataset <- summary(mfit_imputed_dataset, times = 2)
+s2=smfit_imputed_dataset$surv
+```
+
+```{r}
+smfit_imputed_dataset <- summary(mfit_imputed_dataset, times = 5)
+s5=smfit_imputed_dataset$surv
+
+```
+
+```{r}
+
+```
+
+## 1. Model 1
+
+
+```{r}
+imputed_dataset$time1 = imputed_dataset$time
+imputed_dataset$status1 = imputed_dataset$status
+
+imputed_dataset$status[imputed_dataset$time>5] <-0# censor events after 5 years
+imputed_dataset$time[imputed_dataset$time>5] <- 5 # truncate survival time at 5 years
+
+```
+
+## Fractional polynomials for age,egfr and ACR
+
+```{r}
+
+start_time = Sys.time()
+
+model1_fps <- mfp(Surv(time,status==1)~ fp(age) + fp(eGFR) + fp(acr) + male ,family = "cox",verbose = T,select = 0.1,data = imputed_dataset)
+# # # # # # # # # # # 
+model1_fps
+
+Sys.time()-start_time
+```
+
+### Add the FPs for the continuous variables
+
+```{r}
+imputed_dataset$age1 = I((imputed_dataset$age/100)^-1)
+imputed_dataset$age2 = I((imputed_dataset$age/100)^3)
+
+imputed_dataset$eGFR1 = log((imputed_dataset$eGFR/100))
+imputed_dataset$eGFR2 = I((imputed_dataset$eGFR/100)^0.5)
+
+imputed_dataset$acr1 = ((imputed_dataset$acr/100))
+imputed_dataset$acr2 =log(imputed_dataset$acr/100)
+
+saveRDS(imputed_dataset,"data_ready_for_model1.rds")
+
+```
+
+
+```{r}
+summary_model1 = imputed_dataset %>% dplyr::summarise(
+  
+  mean_age1 = mean(age1),
+  mean_age2 = mean(age2),
+  mean_egfr1 = mean(eGFR1),
+  mean_egfr2 = mean(eGFR2),
+  mean_acr1 = mean(acr1),
+  mean_acr2 = mean(acr2)
+)
+
+write.csv(summary_model1,"summary_mean_continuous_vars_model1.csv")
+summary_model1
+
+```
+
+
+
+
+
+
+
+### Fit the competing risk model model 
+
+```{r}
+model1 <- CSC(Hist(time, status) ~
+age1 + age2 + eGFR1 + eGFR2 + acr1 + acr2 + male ,
+data = imputed_dataset,
+fitter = "cph"
+)
+
+fit_csc1 <- model1$models$`Cause 1`
+
+```
+
+### Obtain the coefficients
+
+```{r}
+coef(fit_csc1)
+```
+
+### Baseline risk at 2 and 5 years
+
+```{r}
+
+baseline_hazard <- survival::basehaz(fit_csc1,centered=TRUE)
+time_point <- 5
+H0_at_time <- baseline_hazard$hazard[which.min(abs(baseline_hazard$time - time_point))]
+baseline_survival_at_time <- exp(-H0_at_time)
+s5=baseline_survival_at_time
+
+time_point <- 2  
+H0_at_time <- baseline_hazard$hazard[which.min(abs(baseline_hazard$time - time_point))]
+baseline_survival_at_time <- exp(-H0_at_time)
+s2=baseline_survival_at_time
+
+s2
+s5
+
+```
+
+
+## 2. Model 2
+
+```{r}
+imputed_dataset = imputed_dataset_all_variables
+```
+
+### Create binary ethnicity variables
+
+```{r}
+
+imputed_dataset=data.frame(imputed_dataset)
+imputed_dataset = imputed_dataset %>% dplyr::mutate(
+  white_ethnicity = as.integer(ifelse(ethnicity=="White",1,0)),
+  black_ethnicity = as.integer(ifelse(ethnicity=="Black",1,0)),
+  asian_ethnicity = as.integer(ifelse(ethnicity=="South Asian",1,0)),
+  mixed_ethnicity = as.integer(ifelse(ethnicity=="Mixed race",1,0)),
+  other_ethnicity = as.integer(ifelse(ethnicity=="Others",1,0)),
+  unknown_ethnicity = as.integer(ifelse(ethnicity=="Missing",1,0)))
+
+```
+
+### Select variables I need
+
+```{r}
+imputed_dataset = imputed_dataset %>% dplyr::select(PRACTICE_PATIENT_ID,age,male,eGFR,acr,time,status,white_ethnicity,black_ethnicity,asian_ethnicity,mixed_ethnicity,other_ethnicity,unknown_ethnicity)
+```
+
+```{r}
+imputed_dataset$time1 = imputed_dataset$time
+imputed_dataset$status1 = imputed_dataset$status
+
+imputed_dataset$status[imputed_dataset$time>5] <-0# censor events after 5 years
+imputed_dataset$time[imputed_dataset$time>5] <- 5 # truncate survival time at 5 years
+
+```
+
+### Fractional polynomials for age,egfr and ACR
+
+```{r}
+
+start_time = Sys.time()
+
+model2_fps <- mfp(Surv(time,status==1)~ fp(age) + fp(eGFR) + fp(acr) + male + diabetic + black_ethnicity+asian_ethnicity+mixed_ethnicity+other_ethnicity+unknown_ethnicity ,family = "cox",verbose = T,select = 0.1,data = imputed_dataset)
+
+model2_fps
+
+Sys.time()-start_time
+
+```
+
+### Add the FPs for the continuous variables
+
+```{r}
+imputed_dataset$age1 = I((imputed_dataset$age/100)^-1)
+imputed_dataset$age2 = I((imputed_dataset$age/100)^3)
+
+imputed_dataset$eGFR1 = log((imputed_dataset$eGFR/100))
+imputed_dataset$eGFR2 = I((imputed_dataset$eGFR/100)^0.5)
+
+imputed_dataset$acr1 = ((imputed_dataset$acr/100))
+imputed_dataset$acr2 =log(imputed_dataset$acr/100)
+
+saveRDS(imputed_dataset,"data_ready_for_model2.rds")
+
+```
+
+
+```{r}
+summary_model2 = imputed_dataset %>% dplyr::summarise(
+  
+  mean_age1 = mean(age1),
+  mean_age2 = mean(age2),
+  mean_egfr1 = mean(eGFR1),
+  mean_egfr2 = mean(eGFR2),
+  mean_acr1 = mean(acr1),
+  mean_acr2 = mean(acr2)
+)
+
+write.csv(summary_model2,"summary_mean_continuous_vars_model2.csv")
+summary_model2
+
+```
+
+
+### Fit the competing risk model model 
+
+```{r}
+model1 <- CSC(Hist(time, status) ~
+age1 + age2 + eGFR1 + eGFR2 + acr1 + acr2 + male + diabetic + black_ethnicity+asian_ethnicity+mixed_ethnicity+other_ethnicity+unknown_ethnicity,
+data = imputed_dataset,
+fitter = "cph"
+)
+
+fit_csc1 <- model1$models$`Cause 1`
+
+```
+
+### Obtain the coefficients
+
+```{r}
+coef(fit_csc1)
+```
+
+### Baseline risk at 2 and 5 years
+
+```{r}
+
+baseline_hazard <- survival::basehaz(fit_csc1,centered=TRUE)
+time_point <- 5
+H0_at_time <- baseline_hazard$hazard[which.min(abs(baseline_hazard$time - time_point))]
+baseline_survival_at_time <- exp(-H0_at_time)
+s5=baseline_survival_at_time
+
+time_point <- 2  
+H0_at_time <- baseline_hazard$hazard[which.min(abs(baseline_hazard$time - time_point))]
+baseline_survival_at_time <- exp(-H0_at_time)
+s2=baseline_survival_at_time
+
+s2
+s5
+
+```
+
+
+
+
+
+
