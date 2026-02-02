@@ -1,0 +1,1 @@
+R notebooks for the study Predicting the 2- and 5-year risk of kidney failure for patients with chronic kidney disease in the United Kingdom: external validation and update of the Kidney Failure Risk Equation
