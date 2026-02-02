@@ -1,0 +1,190 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+
+rm(list=ls())
+
+if (!require("pacman")) install.packages("pacman")
+library(pacman)
+
+library(riskRegression)
+
+pacman::p_load(
+  survival,
+  rms,
+  cmprsk,
+  mstate,
+  pseudo,
+  pec,
+  plotrix,
+  knitr,
+  splines,
+  kableExtra,
+  gtsummary,
+  boot,
+  tidyverse,
+  rsample,
+  gridExtra,
+  webshot
+)
+
+library(readstata13)
+
+```
+
+
+
+```{r}
+
+aurum_data = readRDS("data_ready_for_model3ImputedkfreONLY.rds")
+
+names(aurum_data)
+
+```
+
+
+
+```{r}
+dat <- aurum_data %>% dplyr::select(PRACTICE_PATIENT_ID,time1,status1)
+```
+
+
+
+
+```{r}
+
+# ------------------------------------------------------------
+# Aalen–Johansen CIF (Option A) at 2 and 5 years
+# with 95% confidence intervals
+# ------------------------------------------------------------
+
+library(survival)
+
+# ---- Inputs you can edit ----
+                  # your dataset (or vdata)
+time_var <- "time1"            # follow-up time column
+status_var <- "status1"    # 0=censor, 1=event of interest, 2=competing
+horizons <- c(2, 5)           # years (change if your time is not in years)
+cause_interest <- 1           # 1 = kidney failure
+
+# ---- Basic checks ----
+stopifnot(all(c(time_var, status_var) %in% names(dat)))
+cat("Status distribution:\n")
+print(table(dat[[status_var]], useNA = "ifany"))
+
+# ---- Aalen–Johansen via survfit(type="mstate") ----
+
+sf <- survfit(Surv(time1, status1, type = "mstate") ~ 1, data = dat)
+
+sm <- summary(sf, times = horizons)
+
+# In mstate output:
+# pstate columns typically correspond to:
+# 1 = event-free state, 2 = cause 1, 3 = cause 2, ...
+# CIF for cause k is pstate[, 1 + k]
+cif <- sm$pstate[, 1 + cause_interest]
+se  <- sm$std.err[, 1 + cause_interest]
+
+# 95% CI (normal approximation; truncated to [0,1])
+z <- qnorm(0.975)
+lcl <- pmax(0, cif - z * se)
+ucl <- pmin(1, cif + z * se)
+
+out <- data.frame(
+  horizon = horizons,
+  cause = cause_interest,
+  CIF = cif,
+  SE = se,
+  LCL_95 = lcl,
+  UCL_95 = ucl,
+  CIF_percent = 100 * cif,
+  LCL_percent = 100 * lcl,
+  UCL_percent = 100 * ucl
+)
+
+print(out, row.names = FALSE)
+
+# Optional: pretty formatted strings for manuscript
+out$CIF_95CI <- sprintf("%.3f (%.3f to %.3f)", out$CIF, out$LCL_95, out$UCL_95)
+out$CIFpct_95CI <- sprintf("%.3f%% (%.3f to %.3f)", out$CIF_percent, out$LCL_percent, out$UCL_percent)
+print(out[, c("horizon", "CIF_95CI", "CIFpct_95CI")], row.names = FALSE)
+
+
+```
+
+
+```{r}
+# ------------------------------------------------------------
+# Aalen–Johansen CIF at 2 and 5 years
+# with 95% confidence intervals + event counts
+# ------------------------------------------------------------
+
+library(survival)
+
+# ---- Inputs ----
+time_var <- "time1"
+status_var <- "status1"     # 0=censor, 1=event, 2=competing
+horizons <- c(2, 5)
+cause_interest <- 1
+
+# ---- Basic checks ----
+cat("Status distribution:\n")
+print(table(dat[[status_var]], useNA = "ifany"))
+
+# ---- Number of observed events by horizon (raw counts) ----
+n_events <- sapply(
+  horizons,
+  function(h) sum(dat[[status_var]] == cause_interest & dat[[time_var]] <= h, na.rm = TRUE)
+)
+
+# ---- Aalen–Johansen CIF ----
+sf <- survfit(Surv(time1, status1, type = "mstate") ~ 1, data = dat)
+
+sm <- summary(sf, times = horizons)
+
+# CIF for cause of interest
+cif <- sm$pstate[, 1 + cause_interest]
+se  <- sm$std.err[, 1 + cause_interest]
+
+# 95% CI
+z <- qnorm(0.975)
+lcl <- pmax(0, cif - z * se)
+ucl <- pmin(1, cif + z * se)
+
+# ---- Output table ----
+out <- data.frame(
+  horizon_years = horizons,
+  events_observed = n_events,
+  CIF = cif,
+  SE = se,
+  LCL_95 = lcl,
+  UCL_95 = ucl,
+  CIF_percent = 100 * cif,
+  LCL_percent = 100 * lcl,
+  UCL_percent = 100 * ucl
+)
+
+print(out, row.names = FALSE)
+
+# ---- Optional manuscript-ready formatting ----
+out$CIF_95CI <- sprintf("%.3f (%.3f to %.3f)", out$CIF, out$LCL_95, out$UCL_95)
+out$CIFpct_95CI <- sprintf(
+  "%.2f%% (%.2f to %.2f)",
+  out$CIF_percent, out$LCL_percent, out$UCL_percent
+)
+
+print(
+  out[, c("horizon_years", "events_observed", "CIF_95CI", "CIFpct_95CI")],
+  row.names = FALSE
+)
+
+write.csv(out,"Cumulative incidence Aurum.csv")
+
+```
+
+
+
