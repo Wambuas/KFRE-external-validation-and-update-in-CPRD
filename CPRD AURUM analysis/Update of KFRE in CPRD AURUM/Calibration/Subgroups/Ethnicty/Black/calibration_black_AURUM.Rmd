@@ -1219,7 +1219,7 @@ start_time0 = Sys.time()
 
 ```{r}
 
-kfre_uk2 = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/KFRE UK - with additional predictors/mg per g for ACR/data_ready_for_model3Imputedkfreplus.rds")
+kfre_uk2 = readRDS("data_ready_for_model3Imputedkfreplus.rds")
 
 ```
 
