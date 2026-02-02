@@ -206,7 +206,7 @@ s5=smfit_imputed_dataset$surv
 
 ```
 
-## 1. Model 1
+## 1. KFRE UK
 
 
 ```{r}
@@ -265,52 +265,43 @@ summary_model1
 ```
 
 
-
-
-
-
-
 ### Fit the competing risk model model 
 
 ```{r}
+
 model1 <- CSC(Hist(time, status) ~
 age1 + age2 + eGFR1 + eGFR2 + acr1 + acr2 + male ,
 data = imputed_dataset,
-fitter = "cph"
+fitter = "coxph"
 )
 
-fit_csc1 <- model1$models$`Cause 1`
+#fit_csc1 <- model1$models$`Cause 1`
+
+print(model1)
+
 
 ```
 
-### Obtain the coefficients
+
 
 ```{r}
-coef(fit_csc1)
-```
+# The bare minimum to share: coefficients, baseline hazards and model 'terms'
+# (No data sharing is needed)
+model_info <- list(
+  "coefficients" = stats::coef(model1),
+  "baseline_hazards" = lapply(model1$models, function(mod) survival::basehaz(mod, centered = FALSE)),
+  "model_terms" = lapply(model1$models, function(mod) mod[["terms"]])
+)
 
-### Baseline risk at 2 and 5 years
+# Can be saved to then be shared as:
+saveRDS(model_info, file = "model_info_updated_kfre_only.rds")
 
-```{r}
-
-baseline_hazard <- survival::basehaz(fit_csc1,centered=TRUE)
-time_point <- 5
-H0_at_time <- baseline_hazard$hazard[which.min(abs(baseline_hazard$time - time_point))]
-baseline_survival_at_time <- exp(-H0_at_time)
-s5=baseline_survival_at_time
-
-time_point <- 2  
-H0_at_time <- baseline_hazard$hazard[which.min(abs(baseline_hazard$time - time_point))]
-baseline_survival_at_time <- exp(-H0_at_time)
-s2=baseline_survival_at_time
-
-s2
-s5
+saveRDS(model1, "model_full_updated_kfre_only.rds")
 
 ```
 
 
-## 2. Model 2
+## 2. KFRE UK Plus
 
 ```{r}
 imputed_dataset = imputed_dataset_all_variables
@@ -400,38 +391,35 @@ summary_model2
 model1 <- CSC(Hist(time, status) ~
 age1 + age2 + eGFR1 + eGFR2 + acr1 + acr2 + male + diabetic + black_ethnicity+asian_ethnicity+mixed_ethnicity+other_ethnicity+unknown_ethnicity,
 data = imputed_dataset,
-fitter = "cph"
+fitter = "coxph"
 )
 
-fit_csc1 <- model1$models$`Cause 1`
+print(model1)
 
 ```
 
-### Obtain the coefficients
+
 
 ```{r}
-coef(fit_csc1)
-```
+# The bare minimum to share: coefficients, baseline hazards and model 'terms'
+# (No data sharing is needed)
+model_info <- list(
+  "coefficients" = stats::coef(model1),
+  "baseline_hazards" = lapply(model1$models, function(mod) survival::basehaz(mod, centered = FALSE)),
+  "model_terms" = lapply(model1$models, function(mod) mod[["terms"]])
+)
 
-### Baseline risk at 2 and 5 years
+# Can be saved to then be shared as:
+saveRDS(model_info, file = "model_info_updated_kfre_plus.rds")
 
-```{r}
-
-baseline_hazard <- survival::basehaz(fit_csc1,centered=TRUE)
-time_point <- 5
-H0_at_time <- baseline_hazard$hazard[which.min(abs(baseline_hazard$time - time_point))]
-baseline_survival_at_time <- exp(-H0_at_time)
-s5=baseline_survival_at_time
-
-time_point <- 2  
-H0_at_time <- baseline_hazard$hazard[which.min(abs(baseline_hazard$time - time_point))]
-baseline_survival_at_time <- exp(-H0_at_time)
-s2=baseline_survival_at_time
-
-s2
-s5
+saveRDS(model1, "model_full_updated_kfre_plus.rds")
 
 ```
+
+
+
+
+
 
 
 
