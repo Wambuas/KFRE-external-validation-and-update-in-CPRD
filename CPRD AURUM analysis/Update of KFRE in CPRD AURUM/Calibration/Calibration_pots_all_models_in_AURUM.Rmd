@@ -44,7 +44,7 @@ start_time00 = Sys.time()
 ## 1. Benchmark model
 
 ```{r}
-benchmark = readstata13::read.dta13("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Calibration/Benchmark model/mg per g for ACR/IMPUTED_data_for_clinical_utility_orig_and_benchmark_mg_per_g.dta")
+benchmark = readstata13::read.dta13("IMPUTED_data_for_clinical_utility_orig_and_benchmark_mg_per_g.dta")
 
 benchmark = benchmark %>% dplyr::select(
   patient_id,
@@ -621,7 +621,7 @@ start_time0 = Sys.time()
 
 ```{r}
 
-kfre_uk1 = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/KFRE UK - with kfre predictors only/mg per g for ACR/data_ready_for_model3ImputedkfreONLY.rds")
+kfre_uk1 = readRDS("data_ready_for_model3ImputedkfreONLY.rds")
 
 ```
 
@@ -630,7 +630,7 @@ kfre_uk1 = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final datas
 
 ```{r}
 
-model3 = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/2026/model_full_updated_kfre_only.rds")
+model3 = readRDS("model_full_updated_kfre_only.rds")
 
 
 ```
@@ -1214,7 +1214,7 @@ start_time0 = Sys.time()
 
 ```{r}
 
-kfre_uk2 = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/KFRE UK - with additional predictors/mg per g for ACR/data_ready_for_model3Imputedkfreplus.rds")
+kfre_uk2 = readRDS("data_ready_for_model3Imputedkfreplus.rds")
 
 ```
 
@@ -1223,7 +1223,7 @@ kfre_uk2 = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final datas
 
 ```{r}
 
-model3 = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/2026/model_full_updated_kfre_plus.rds")
+model3 = readRDS("model_full_updated_kfre_plus.rds")
 ```
 
 
