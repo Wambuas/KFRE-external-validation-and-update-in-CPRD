@@ -41,7 +41,7 @@ library(readstata13)
 ## 1. Benchmark model
 
 ```{r}
-benchmark = readRDS("gold_imputed_data_ready_for_validation.rds")
+benchmark = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/Benchmark models/Linked data/gold_imputed_data_ready_for_validation.rds")
 
 benchmark = subset(benchmark,benchmark$diabetic==1)
 
@@ -248,6 +248,45 @@ res_cal_2years
 
 ```
 
+###### Observed/Expected ratio 
+
+```{r}
+## Observed/Expected ratio --------------------------------------------
+# First calculate Aalen-Johansen estimate (as 'observed')
+
+sf <- survfit(Surv(time, status, type = "mstate") ~ 1, data = vdata)
+obj <- summary(sf, times = horizon)
+
+# column 1 is event-free; column 2 is cause 1; column 3 is cause 2
+primary_event <- 1
+aj <- list(
+  obs = obj$pstate[, primary_event + 1],
+  se  = obj$std.err[, primary_event + 1]
+)
+
+# Calculate O/E
+OE <- aj$obs / mean(pred)
+
+# For the confidence interval we use method proposed in Debray et al. (2017) doi:10.1136/bmj.i6460
+k <- 3
+alpha <- 0.05
+OE_summary <- base::cbind(
+  "estimate" = OE,
+  `2.5 %` = exp(log(OE) - qnorm(1 - alpha / 2) * aj$se / aj$obs),
+  `97.5 %` = exp(log(OE) + qnorm(1 - alpha / 2) * aj$se / aj$obs))
+
+
+OE_summary <- base::round(OE_summary, k)
+rownames(OE_summary) <- "O/E ratio"
+
+write.csv(OE_summary,"OE_summary_2yrs_benchmark.csv")
+
+OE_summary_2years = OE_summary
+
+```
+
+
+
 
 ##### 5 years
 
@@ -417,6 +456,45 @@ res_cal_5years
 ```
 
 
+###### Observed/Expected ratio 
+
+```{r}
+## Observed/Expected ratio --------------------------------------------
+# First calculate Aalen-Johansen estimate (as 'observed')
+sf <- survfit(Surv(time, status, type = "mstate") ~ 1, data = vdata)
+obj <- summary(sf, times = horizon)
+
+
+aj <- list(
+  "obs" = obj$pstate[, primary_event + 1],
+  "se" = obj$std.err[, primary_event + 1]
+)
+
+# Calculate O/E
+OE <- aj$obs / mean(pred)
+
+# For the confidence interval we use method proposed in Debray et al. (2017) doi:10.1136/bmj.i6460
+k <- 3
+alpha <- 0.05
+OE_summary <- base::cbind(
+  "estimate" = OE,
+  `2.5 %` = exp(log(OE) - qnorm(1 - alpha / 2) * aj$se / aj$obs),
+  `97.5 %` = exp(log(OE) + qnorm(1 - alpha / 2) * aj$se / aj$obs))
+
+
+OE_summary <- base::round(OE_summary, k)
+
+rownames(OE_summary) <- "O/E ratio"
+
+write.csv(OE_summary,"OE_summary_5yrs_benchmark.csv")
+
+OE_summary_5years = OE_summary
+
+```
+
+
+
+
 #### Combined calibration plot 
 
 ##### All predicted and observed risk
@@ -527,7 +605,19 @@ res_cal_2years = rownames_to_column(res_cal_2years, var = "Metric")
 res_cal_2years$Time = "2 years"
 res_cal_2years$Model = "Benchmark"
 
-cal_metrics_benchmark = rbind(res_cal_5years,res_cal_2years)
+OE_summary_5years = data.frame(OE_summary_5years)
+OE_summary_5years = rownames_to_column(OE_summary_5years, var = "Metric")
+OE_summary_5years$Time = "5 years"
+OE_summary_5years$Model = "Benchmark"
+
+OE_summary_2years = data.frame(OE_summary_2years)
+OE_summary_2years = rownames_to_column(OE_summary_2years, var = "Metric")
+OE_summary_2years$Time = "2 years"
+OE_summary_2years$Model = "Benchmark"
+
+cal_metrics_benchmark = rbind(res_cal_5years,res_cal_2years,
+                              
+                              OE_summary_5years,OE_summary_2years)
 
 cal_metrics_benchmark$"Metric estimate (95% CI)" = ifelse(is.na(cal_metrics_benchmark$estimate), "",
                              sprintf("%.3f (%.3f to %.3f)",
@@ -541,19 +631,9 @@ saveRDS(cal_metrics_benchmark,"Calibration_summary_stats_Benchmark.rds")
 
 ## 2. KFREUK1 model
 
+
 ```{r}
 start_time0 = Sys.time()
-```
-
-
-```{r}
-
-kfre_uk1 = readRDS("gold_imputed_data_ready_for_validation_kfreuk1.rds")
-
-
-kfre_uk1 = subset(kfre_uk1,kfre_uk1$diabetic==1)
-
-
 ```
 
 
@@ -561,38 +641,53 @@ kfre_uk1 = subset(kfre_uk1,kfre_uk1$diabetic==1)
 
 ```{r}
 
-s2_KFREUK1 = 0.9994368
-s5_KFREUK1 = 0.9983078
+kfre_uk1 = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/KFRE UK 1/IMPUTED/gold_imputed_data_ready_for_validation_kfreuk1.rds")
 
-x = kfre_uk1 %>% dplyr::mutate(
+kfre_uk1 = subset(kfre_uk1,kfre_uk1$diabetic==1)
 
-  sex=ifelse(female== 0, 1, 0),
-    ACR1 = ACR_value/100,
-    ACR2 = log(ACR_value/100),
+
+kfre_only_model = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/2026/model_info_updated_kfre_only.rds")
+
+kfre_only_full_model = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/2026/model_full_updated_kfre_only.rds")
+
+
+
+kfre_uk1 = kfre_uk1 %>% dplyr::mutate(
+
+  male=ifelse(female== 0, 1, 0),
+    acr1 = ACR_value/100,
+    acr2 = log(ACR_value/100),
   age1 = (Age2/100)^-1,
   age2 = (Age2/100)^3,
-  egfr1 = log(EGFR2/100),
-  egfr2 = (EGFR2/100)^0.5,
-  ### 2 years
-  #original KFRE
-  LP = ((0.173393276 *(age1-1.4169216))+
-        (-4.736050324 *(age2-0.4124569))
-                  + (0.555522277*sex)
-                  + (2.224911285*(egfr1+0.6918350))
-                  +(-19.359795740*(egfr2-0.7121481))
-                  + (0.005558573*(ACR1-0.8443034))
-                    +(0.376014346*(ACR2+2.1872091))),
-   ### 2 years
-  score_2yrs_KFREUK1 = (1-(s2_KFREUK1 ^ exp(LP))),
-   ### 5 years
-  score_5yrs_KFREUK1 = (1-(s5_KFREUK1 ^ exp(LP))),
-
-
-  time2yrs = ifelse(time1>2,2,time1),
-  time5yrs = ifelse(time1>5,5,time1),
-  status2yrs = ifelse(time1>2,0,status1),
-  status5yrs = ifelse(time1>5,0,status1),
+  eGFR1 = log(EGFR2/100),
+  eGFR2 = (EGFR2/100)^0.5,
   patient_id = PRACTICE_PATIENT_ID)
+
+
+kfre_uk1$LP = predict(kfre_only_full_model$models$`Cause 1`,newdata = kfre_uk1, type = "lp")
+
+kfre_uk1$score_2yrs_KFREUK1 <- riskRegression::predictRisk(
+  kfre_only_full_model,
+  cause = 1,
+  newdata = kfre_uk1,
+  times = 2)
+
+kfre_uk1$score_5yrs_KFREUK1 <- riskRegression::predictRisk(
+  kfre_only_full_model,
+  cause = 1,
+  newdata = kfre_uk1,
+  times = 5)
+
+
+
+kfre_uk1 = kfre_uk1 %>% dplyr::select(
+  patient_id,
+  time1,status1,
+  LP,
+  score_2yrs_KFREUK1,
+  score_5yrs_KFREUK1)
+
+x = kfre_uk1
 
 ```
 
@@ -765,6 +860,42 @@ res_cal_2years
 ```
 
 
+###### Observed/Expected ratio 
+
+```{r}
+## Observed/Expected ratio --------------------------------------------
+# First calculate Aalen-Johansen estimate (as 'observed')
+sf <- survfit(Surv(time, status, type = "mstate") ~ 1, data = vdata)
+obj <- summary(sf, times = horizon)
+
+
+aj <- list(
+  "obs" = obj$pstate[, primary_event + 1],
+  "se" = obj$std.err[, primary_event + 1]
+)
+
+# Calculate O/E
+OE <- aj$obs / mean(pred)
+
+# For the confidence interval we use method proposed in Debray et al. (2017) doi:10.1136/bmj.i6460
+k <- 3
+alpha <- 0.05
+OE_summary <- base::cbind(
+  "estimate" = OE,
+  `2.5 %` = exp(log(OE) - qnorm(1 - alpha / 2) * aj$se / aj$obs),
+  `97.5 %` = exp(log(OE) + qnorm(1 - alpha / 2) * aj$se / aj$obs))
+
+OE_summary <- base::round(OE_summary, k)
+
+rownames(OE_summary) <- "O/E ratio"
+
+write.csv(OE_summary,"OE_summary_2yrs_kfreonly.csv")
+
+OE_summary_2years = OE_summary
+
+```
+
+
 ##### 5 years
 
 ```{r}
@@ -933,6 +1064,43 @@ res_cal_5years
 ```
 
 
+###### Observed/Expected ratio 
+
+```{r}
+## Observed/Expected ratio --------------------------------------------
+# First calculate Aalen-Johansen estimate (as 'observed')
+sf <- survfit(Surv(time, status, type = "mstate") ~ 1, data = vdata)
+obj <- summary(sf, times = horizon)
+
+aj <- list(
+  "obs" = obj$pstate[, primary_event + 1],
+  "se" = obj$std.err[, primary_event + 1]
+)
+
+# Calculate O/E
+OE <- aj$obs / mean(pred)
+
+# For the confidence interval we use method proposed in Debray et al. (2017) doi:10.1136/bmj.i6460
+k <- 3
+alpha <- 0.05
+OE_summary <- base::cbind(
+  "estimate" = OE,
+  `2.5 %` = exp(log(OE) - qnorm(1 - alpha / 2) * aj$se / aj$obs),
+  `97.5 %` = exp(log(OE) + qnorm(1 - alpha / 2) * aj$se / aj$obs))
+
+OE_summary <- base::round(OE_summary, k)
+
+rownames(OE_summary) <- "O/E ratio"
+
+write.csv(OE_summary,"OE_summary_5yrs_kfreonly.csv")
+
+OE_summary_5years = OE_summary
+
+
+```
+
+
+
 #### Combined calibration plot 
 
 ##### All predicted and observed risk
@@ -1043,13 +1211,28 @@ res_cal_2years = rownames_to_column(res_cal_2years, var = "Metric")
 res_cal_2years$Time = "2 years"
 res_cal_2years$Model = "KFREUK1"
 
-cal_metrics_KFREUK1 = rbind(res_cal_5years,res_cal_2years)
+OE_summary_5years = data.frame(OE_summary_5years)
+OE_summary_5years = rownames_to_column(OE_summary_5years, var = "Metric")
+OE_summary_5years$Time = "5 years"
+OE_summary_5years$Model = "Benchmark"
+
+OE_summary_2years = data.frame(OE_summary_2years)
+OE_summary_2years = rownames_to_column(OE_summary_2years, var = "Metric")
+OE_summary_2years$Time = "2 years"
+OE_summary_2years$Model = "Benchmark"
+
+cal_metrics_KFREUK1 = rbind(res_cal_5years,res_cal_2years,
+                              
+                              OE_summary_5years,OE_summary_2years)
+
 
 cal_metrics_KFREUK1$"Metric estimate (95% CI)" = ifelse(is.na(cal_metrics_KFREUK1$estimate), "",
                              sprintf("%.3f (%.3f to %.3f)",
                                      cal_metrics_KFREUK1$estimate, cal_metrics_KFREUK1$X2.5.., cal_metrics_KFREUK1$X97.5..))
 
 cal_metrics_KFREUK1 = cal_metrics_KFREUK1[,c(1,5:7)]
+
+
 saveRDS(cal_metrics_KFREUK1,"Calibration_summary_stats_KFREUK1.rds")
 
 ```
@@ -1067,70 +1250,68 @@ start_time0 = Sys.time()
 ```
 
 
-
-```{r}
-
-kfre_uk2 = readRDS("gold_imputed_data_ready_for_validation_kfreplus.rds")
-
-kfre_uk2 = subset(kfre_uk2,kfre_uk2$diabetic==1)
-
-```
-
-
 #### Calculating the risk scores using the KFREUK2 model
 
 ```{r}
 
-s2_KFREUK2 = 0.999524
-s5_KFREUK2 = 0.998532
 
-x = kfre_uk2 %>% dplyr::mutate(
 
-  sex=ifelse(female== 0, 1, 0),
-    ACR1 = (ACR_value/100),
-    ACR2 = log(ACR_value/100),
+kfre_uk2 = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/KFRE UK 2/gold_imputed_data_ready_for_validation_kfreplus.rds")
+
+kfre2_only_model = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/2026/model_info_updated_kfre_plus.rds")
+
+kfre2_only_full_model = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/2026/model_full_updated_kfre_plus.rds")
+
+
+kfre_uk2 = kfre_uk2 %>% dplyr::mutate(
+
+  male=ifelse(female== 0, 1, 0),
+    acr1 = (ACR_value/100),
+    acr2 = log(ACR_value/100),
   age1 = (Age2/100)^-1,
   age2 = (Age2/100)^3,
-  egfr1 = log(EGFR2/100),
-  egfr2 = (EGFR2/100)^0.5,
+  eGFR1 = log(EGFR2/100),
+  eGFR2 = (EGFR2/100)^0.5,
   
-  black = ifelse(ethnicity=="Black",1,0),
-  white = ifelse(ethnicity=="White",1,0),
-  asian = ifelse(ethnicity=="South Asian",1,0),
-  mixed = ifelse(ethnicity=="Mixed race",1,0),
-  others = ifelse(ethnicity=="Others",1,0),
-  unknown = ifelse(ethnicity=="Unknown",1,0),
+  black_ethnicity = ifelse(ethnicity=="Black",1,0),
+  white_ethnicity = ifelse(ethnicity=="White",1,0),
+  asian_ethnicity = ifelse(ethnicity=="South Asian",1,0),
+  mixed_ethnicity = ifelse(ethnicity=="Mixed race",1,0),
+  other_ethnicity = ifelse(ethnicity=="Others",1,0),
+  unknown_ethnicity = ifelse(ethnicity=="Unknown",1,0),
   
-  diabetic = ifelse(diabetic=="1",1,0),
-  
-  ### 2 years
-  #original KFRE
-  LP = ((0.302900388  *(age1-1.4169216))+
-        (-4.225650207 *(age2-0.4124569))
-                  + (0.522087156 *sex)
-                  + (2.200144187 *(egfr1+0.6918350))
-                  +(-19.309421031*(egfr2-0.7121481))
-                  + (0.005672024*(ACR1-0.8443034))
-                  + (0.342234580*(ACR2+2.1872091))
-                  + (0.785136320*(diabetic)) 
-                  +  (0.227325295*(black))
-                   +  (0.310993852*(asian))
-                     + (0.020676575*(mixed))
-                    + (0.327495457*(others))
-                    +  (-1.001371116*(unknown))),
-   ### 2 years
-  score_2yrs_KFREUK2 = (1-(s2_KFREUK2 ^ exp(LP))),
-   ### 5 years
-  score_5yrs_KFREUK2 = (1-(s5_KFREUK2 ^ exp(LP))),
-
-
-  time2yrs = ifelse(time1>2,2,time1),
-  time5yrs = ifelse(time1>5,5,time1),
-  status2yrs = ifelse(time1>2,0,status1),
-  status5yrs = ifelse(time1>5,0,status1),
   patient_id = PRACTICE_PATIENT_ID)
 
+kfre_uk2 = subset(kfre_uk2,kfre_uk2$diabetic==1)
+
+kfre_uk2$LP = predict(kfre2_only_full_model$models$`Cause 1`,newdata = kfre_uk2, type = "lp")
+
+kfre_uk2$score_2yrs_KFREUK2 <- riskRegression::predictRisk(
+  kfre2_only_full_model,
+  cause = 1,
+  newdata = kfre_uk2,
+  times = 2)
+
+kfre_uk2$score_5yrs_KFREUK2 <- riskRegression::predictRisk(
+  kfre2_only_full_model,
+  cause = 1,
+  newdata = kfre_uk2,
+  times = 5)
+
+
+
+kfre_uk2 = kfre_uk2 %>% dplyr::select(
+  patient_id,
+  time1,status1,
+  LP,
+  score_2yrs_KFREUK2,
+  score_5yrs_KFREUK2)
+
+
+x = kfre_uk2
+
 ```
+
 
 ##### 2 years
 
@@ -1301,6 +1482,46 @@ res_cal_2years
 ```
 
 
+###### Observed/Expected ratio 
+
+```{r}
+## Observed/Expected ratio --------------------------------------------
+# First calculate Aalen-Johansen estimate (as 'observed')
+sf <- survfit(Surv(time, status, type = "mstate") ~ 1, data = vdata)
+obj <- summary(sf, times = horizon)
+
+aj <- list(
+  "obs" = obj$pstate[, primary_event + 1],
+  "se" = obj$std.err[, primary_event + 1]
+)
+
+# Calculate O/E
+OE <- aj$obs / mean(pred)
+
+# For the confidence interval we use method proposed in Debray et al. (2017) doi:10.1136/bmj.i6460
+k <- 3
+alpha <- 0.05
+OE_summary <- base::cbind(
+  "estimate" = OE,
+  `2.5 %` = exp(log(OE) - qnorm(1 - alpha / 2) * aj$se / aj$obs),
+  `97.5 %` = exp(log(OE) + qnorm(1 - alpha / 2) * aj$se / aj$obs))
+
+
+OE_summary <- base::round(OE_summary, k)
+
+rownames(OE_summary) <- "O/E ratio"
+
+write.csv(OE_summary,"OE_summary_2yrs_kfreplus.csv")
+
+OE_summary_2years = OE_summary
+
+
+```
+
+
+
+
+
 ##### 5 years
 
 ```{r}
@@ -1469,6 +1690,47 @@ res_cal_5years
 ```
 
 
+###### Observed/Expected ratio 
+
+```{r}
+## Observed/Expected ratio --------------------------------------------
+# First calculate Aalen-Johansen estimate (as 'observed')
+sf <- survfit(Surv(time, status, type = "mstate") ~ 1, data = vdata)
+obj <- summary(sf, times = horizon)
+
+
+aj <- list(
+  "obs" = obj$pstate[, primary_event + 1],
+  "se" = obj$std.err[, primary_event + 1]
+)
+
+# Calculate O/E
+OE <- aj$obs / mean(pred)
+
+# For the confidence interval we use method proposed in Debray et al. (2017) doi:10.1136/bmj.i6460
+k <- 3
+alpha <- 0.05
+OE_summary <- base::cbind(
+  "estimate" = OE,
+  `2.5 %` = exp(log(OE) - qnorm(1 - alpha / 2) * aj$se / aj$obs),
+  `97.5 %` = exp(log(OE) + qnorm(1 - alpha / 2) * aj$se / aj$obs))
+
+
+OE_summary <- base::round(OE_summary, k)
+
+rownames(OE_summary) <- "O/E ratio"
+
+write.csv(OE_summary,"OE_summary_5yrs_kfreplus.csv")
+
+OE_summary_5years = OE_summary
+
+```
+
+
+
+
+
+
 #### Combined calibration plot 
 
 ##### All predicted and observed risk
@@ -1579,7 +1841,19 @@ res_cal_2years = rownames_to_column(res_cal_2years, var = "Metric")
 res_cal_2years$Time = "2 years"
 res_cal_2years$Model = "KFREUK2"
 
-cal_metrics_KFREUK2 = rbind(res_cal_5years,res_cal_2years)
+OE_summary_5years = data.frame(OE_summary_5years)
+OE_summary_5years = rownames_to_column(OE_summary_5years, var = "Metric")
+OE_summary_5years$Time = "5 years"
+OE_summary_5years$Model = "Benchmark"
+
+OE_summary_2years = data.frame(OE_summary_2years)
+OE_summary_2years = rownames_to_column(OE_summary_2years, var = "Metric")
+OE_summary_2years$Time = "2 years"
+OE_summary_2years$Model = "Benchmark"
+
+cal_metrics_KFREUK2 = rbind(res_cal_5years,res_cal_2years,
+                              
+                              OE_summary_5years,OE_summary_2years)
 
 cal_metrics_KFREUK2$"Metric estimate (95% CI)" = ifelse(is.na(cal_metrics_KFREUK2$estimate), "",
                              sprintf("%.3f (%.3f to %.3f)",
@@ -1601,16 +1875,21 @@ Sys.time()-start_time0
 ```{r}
 
 benchmark_cal_data = readRDS("benchmark_cal_plot_data_pseudo_values.rds")
+benchmark_cal_data$Model = "Current KFRE"
+
 kfreuk1_cal_data = readRDS("KFREUK1_cal_plot_data_pseudo_values.rds")
+kfreuk1_cal_data$Model = "KFRE UK"
+
 kfreuk2_cal_data = readRDS("KFREUK2_cal_plot_data_pseudo_values.rds")
+kfreuk2_cal_data$Model = "KFRE UK Plus"
 
 combined_cal_data = rbind(benchmark_cal_data,kfreuk1_cal_data,kfreuk2_cal_data)
 
 combined_cal_data = combined_cal_data %>% dplyr::mutate(
   
-  Model2 = recode(Model, "Benchmark"="Benchmark","KFREUK1"="Model 1","KFREUK2"="Model 2"),
+  Model2 = recode(Model, "Current KFRE"="Current KFRE","KFRE UK"="KFRE UK","KFRE UK Plus"="KFRE UK Plus"),
   
-  Model = factor(Model2,levels = c("Benchmark","Model 1","Model 2"))
+  Model = factor(Model2,levels = c("Current KFRE","KFRE UK","KFRE UK Plus"))
 )
 
 ```
@@ -1771,8 +2050,10 @@ version1 = (plot_2yrs_restricted + theme(axis.title.x = element_blank()) + labs(
 
 ggsave(version1,filename = "Final_Restricteda_Plots.jpeg",width = 49,height = 35, dpi=300)
 
-```
 
+
+
+```
 
 
 ### 2 years and 5 years - Version 2
@@ -1808,6 +2089,15 @@ figure_5_data$Time2 = factor(figure_5_data$Time2,levels = c("2 years (Full plot)
 
 figure_5_data1 = subset(figure_5_data,figure_5_data$Time2=="2 years (Full plot)")
 
+
+
+ideal_seg_df <- data.frame(
+  x = 0, y = 0,
+  xend = 1, yend = 1,
+  label = "Ideal calibration"
+)
+
+
 p1 = ggplot(figure_5_data1, aes(
   x = risk,
   y = obs,
@@ -1823,15 +2113,15 @@ p1 = ggplot(figure_5_data1, aes(
   ylab("Observed risks") +
   theme_bw() +
   scale_color_manual(values = c(
-    "Benchmark" = "#4D4D4D",  # dark-grey
-    "Model 1"   = "#56B4E9" ,  # sky blue
-    "Model 2"   = "#E69F00"  # orange
+    "Current KFRE" = "#4D4D4D",  # dark-grey
+    "KFRE UK"   = "#56B4E9" ,  # sky blue
+    "KFRE UK Plus"   = "#E69F00"  # orange
    
   )) +
   scale_linetype_manual(values = c(
-    "Benchmark" = "dashed",
-    "Model 1"   = "dotdash",
-    "Model 2"   = "solid"
+    "Current KFRE" = "dashed",
+    "KFRE UK"   = "dotdash",
+    "KFRE UK Plus"   = "solid"
   
   )) +
   theme(
@@ -1866,15 +2156,15 @@ p2 = ggplot(figure_5_data2, aes(
   ylab("Observed risks") +
   theme_bw() +
   scale_color_manual(values = c(
-    "Benchmark" = "#4D4D4D",  # dark-grey
-    "Model 1"   = "#56B4E9" ,  # sky blue
-    "Model 2"   = "#E69F00"  # orange
+    "Current KFRE" = "#4D4D4D",  # dark-grey
+    "KFRE UK"   = "#56B4E9" ,  # sky blue
+    "KFRE UK Plus"   = "#E69F00"  # orange
    
   )) +
   scale_linetype_manual(values = c(
-    "Benchmark" = "dashed",
-    "Model 1"   = "dotdash",
-    "Model 2"   = "solid"
+    "Current KFRE" = "dashed",
+    "KFRE UK"   = "dotdash",
+    "KFRE UK Plus"   = "solid"
   
   )) +
   theme(
@@ -1921,15 +2211,15 @@ p3 = ggplot(figure_5_data1, aes(
   ylab("Observed risks") +
   theme_bw() +
   scale_color_manual(values = c(
-    "Benchmark" = "#4D4D4D",  # dark-grey
-    "Model 1"   = "#56B4E9" ,  # sky blue
-    "Model 2"   = "#E69F00"  # orange
+    "Current KFRE" = "#4D4D4D",  # dark-grey
+    "KFRE UK"   = "#56B4E9" ,  # sky blue
+    "KFRE UK Plus"   = "#E69F00"  # orange
    
   )) +
   scale_linetype_manual(values = c(
-    "Benchmark" = "dashed",
-    "Model 1"   = "dotdash",
-    "Model 2"   = "solid"
+    "Current KFRE" = "dashed",
+    "KFRE UK"   = "dotdash",
+    "KFRE UK Plus"   = "solid"
   
   )) +
   theme(
@@ -1964,15 +2254,15 @@ p4 = ggplot(figure_5_data2, aes(
   ylab("Observed risks") +
   theme_bw() +
   scale_color_manual(values = c(
-    "Benchmark" = "#4D4D4D",  # dark-grey
-    "Model 1"   = "#56B4E9" ,  # sky blue
-    "Model 2"   = "#E69F00"  # orange
+    "Current KFRE" = "#4D4D4D",  # dark-grey
+    "KFRE UK"   = "#56B4E9" ,  # sky blue
+    "KFRE UK Plus"   = "#E69F00"  # orange
    
   )) +
   scale_linetype_manual(values = c(
-    "Benchmark" = "dashed",
-    "Model 1"   = "dotdash",
-    "Model 2"   = "solid"
+    "Current KFRE" = "dashed",
+    "KFRE UK"   = "dotdash",
+    "KFRE UK Plus"   = "solid"
   
   )) +
   theme(
@@ -2009,7 +2299,6 @@ ggsave(version1,filename = "Figure_5_Final_V2.jpeg",width = 47,height = 42.8, dp
 ```
 
 
-
 ### 2 years and 5 years - Greyscale colors
 
 #### 2 year full + restricted
@@ -2018,10 +2307,10 @@ ggsave(version1,filename = "Figure_5_Final_V2.jpeg",width = 47,height = 42.8, dp
 
 figure_5_data1 = subset(figure_5_data,figure_5_data$Time2=="2 years (Full plot)")
 
-ideal_line_df <- data.frame(
-  slope = 1,
-  intercept = 0,
-  label = "Reference"
+ideal_seg_df <- data.frame(
+  x = 0, y = 0,
+  xend = 1, yend = 1,
+  label = "Ideal calibration"
 )
 
 p1 = ggplot(figure_5_data1, aes(
@@ -2031,23 +2320,25 @@ p1 = ggplot(figure_5_data1, aes(
   color = Model,
   linetype = Model
 ))  +
-  geom_abline(
-    data = ideal_line_df,
-    aes(slope = slope, intercept = intercept,
+  # Ideal calibration line ONLY between (0,0) and (1,1)
+  geom_segment(
+    data = ideal_seg_df,
+    aes(x = x, y = y, xend = xend, yend = yend,
         color = label, linetype = label),
+    inherit.aes = FALSE,
     linewidth = 3,
-    key_glyph = ggplot2::draw_key_path   # <- makes legend line horizontal
+    key_glyph = ggplot2::draw_key_path
   ) +
   geom_line(linewidth = 5) +
   scale_y_continuous(breaks = seq(0,1,0.2), limits = c(0,1)) +
   scale_x_continuous(breaks = seq(0,1,0.2), limits = c(0,1)) +
   scale_color_manual(
-    values = c("Reference"="red","Benchmark"="#4D4D4D","Model 1"="#56B4E9","Model 2"="#E69F00"),
-    breaks = c("Reference","Benchmark","Model 1","Model 2")
+    values = c("Ideal calibration"="red","Current KFRE"="#4D4D4D","KFRE UK"="#56B4E9","KFRE UK Plus"="#E69F00"),
+    breaks = c("Ideal calibration","Current KFRE","KFRE UK","KFRE UK Plus")
   ) +
   scale_linetype_manual(
-    values = c("Reference"="dashed","Benchmark"="dashed","Model 1"="dotdash","Model 2"="solid"),
-    breaks = c("Reference","Benchmark","Model 1","Model 2")
+    values = c("Ideal calibration"="dashed","Current KFRE"="dashed","KFRE UK"="dotdash","KFRE UK Plus"="solid"),
+    breaks = c("Ideal calibration","Current KFRE","KFRE UK","KFRE UK Plus")
   ) +
   guides(
     color = guide_legend(order = 1),
@@ -2071,6 +2362,13 @@ ggsave(p1,filename = "Figure_5a_V2.jpeg",width = 45,height = 20, dpi=300)
 
 figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="2 years (Restricted plot)")
 
+
+ideal_seg_df <- data.frame(
+  x = 0, y = 0,
+  xend = 0.5, yend = 0.5,
+  label = "Ideal calibration"
+)
+
 p2 = ggplot(figure_5_data2, aes(
   x = risk,
   y = obs,
@@ -2078,10 +2376,12 @@ p2 = ggplot(figure_5_data2, aes(
   color = Model,
   linetype = Model
 )) +
-  geom_abline(
-    data = ideal_line_df,
-    aes(slope = slope, intercept = intercept,
+ # Ideal calibration line ONLY between (0,0) and (1,1)
+  geom_segment(
+    data = ideal_seg_df,
+    aes(x = x, y = y, xend = xend, yend = yend,
         color = label, linetype = label),
+    inherit.aes = FALSE,
     linewidth = 3,
     key_glyph = ggplot2::draw_key_path
   ) +
@@ -2092,21 +2392,21 @@ p2 = ggplot(figure_5_data2, aes(
   theme_bw() +
   scale_color_manual(
     values = c(
-      "Reference" = "red",
-      "Benchmark"  = "#4D4D4D",
-      "Model 1"    = "#56B4E9",
-      "Model 2"    = "#E69F00"
+      "Ideal calibration" = "red",
+      "Current KFRE"  = "#4D4D4D",
+      "KFRE UK"    = "#56B4E9",
+      "KFRE UK Plus"    = "#E69F00"
     ),
-    breaks = c("Reference","Benchmark","Model 1","Model 2")
+    breaks = c("Ideal calibration","Current KFRE","KFRE UK","KFRE UK Plus")
   ) +
   scale_linetype_manual(
     values = c(
-      "Reference" = "dashed",  # <- use character, not 2
-      "Benchmark"  = "dashed",
-      "Model 1"    = "dotdash",
-      "Model 2"    = "solid"
+      "Ideal calibration" = "dashed",  # <- use character, not 2
+      "Current KFRE"  = "dashed",
+      "KFRE UK"    = "dotdash",
+      "KFRE UK Plus"    = "solid"
     ),
-    breaks = c("Reference","Benchmark","Model 1","Model 2")
+    breaks = c("Ideal calibration","Current KFRE","KFRE UK","KFRE UK Plus")
   ) +
   guides(
     color = guide_legend(order = 1),
@@ -2141,6 +2441,12 @@ ggsave(version1,filename = "Figure_5ab_V2.jpeg",width = 45,height = 20, dpi=300)
 
 figure_5_data1 = subset(figure_5_data,figure_5_data$Time2=="5 years (Full plot)")
 
+ideal_seg_df <- data.frame(
+  x = 0, y = 0,
+  xend = 1, yend = 1,
+  label = "Ideal calibration"
+)
+
 p3 = ggplot(figure_5_data1, aes(
   x = risk,
   y = obs,
@@ -2148,23 +2454,25 @@ p3 = ggplot(figure_5_data1, aes(
   color = Model,
   linetype = Model
 )) +
-  geom_abline(
-    data = ideal_line_df,
-    aes(slope = slope, intercept = intercept,
+  # Ideal calibration line ONLY between (0,0) and (1,1)
+  geom_segment(
+    data = ideal_seg_df,
+    aes(x = x, y = y, xend = xend, yend = yend,
         color = label, linetype = label),
+    inherit.aes = FALSE,
     linewidth = 3,
-    key_glyph = ggplot2::draw_key_path   # <- makes legend line horizontal
+    key_glyph = ggplot2::draw_key_path
   ) +
   geom_line(linewidth = 5) +
   scale_y_continuous(breaks = seq(0,1,0.2), limits = c(0,1)) +
   scale_x_continuous(breaks = seq(0,1,0.2), limits = c(0,1)) +
   scale_color_manual(
-    values = c("Reference"="red","Benchmark"="#4D4D4D","Model 1"="#56B4E9","Model 2"="#E69F00"),
-    breaks = c("Reference","Benchmark","Model 1","Model 2")
+    values = c("Ideal calibration"="red","Current KFRE"="#4D4D4D","KFRE UK"="#56B4E9","KFRE UK Plus"="#E69F00"),
+    breaks = c("Ideal calibration","Current KFRE","KFRE UK","KFRE UK Plus")
   ) +
   scale_linetype_manual(
-    values = c("Reference"="dashed","Benchmark"="dashed","Model 1"="dotdash","Model 2"="solid"),
-    breaks = c("Reference","Benchmark","Model 1","Model 2")
+    values = c("Ideal calibration"="dashed","Current KFRE"="dashed","KFRE UK"="dotdash","KFRE UK Plus"="solid"),
+    breaks = c("Ideal calibration","Current KFRE","KFRE UK","KFRE UK Plus")
   ) +
   guides(
     color = guide_legend(order = 1),
@@ -2188,6 +2496,15 @@ ggsave(p3,filename = "Figure_5c_V2.jpeg",width = 45,height = 20, dpi=300)
 
 figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="5 years (Restricted plot)")
 
+
+ideal_seg_df <- data.frame(
+  x = 0, y = 0,
+  xend = 0.1, yend = 0.1,
+  label = "Ideal calibration"
+)
+
+
+
 p4 = ggplot(figure_5_data2, aes(
   x = risk,
   y = obs,
@@ -2195,23 +2512,25 @@ p4 = ggplot(figure_5_data2, aes(
   color = Model,
   linetype = Model
 ))+
-  geom_abline(
-    data = ideal_line_df,
-    aes(slope = slope, intercept = intercept,
+  # Ideal calibration line ONLY between (0,0) and (1,1)
+  geom_segment(
+    data = ideal_seg_df,
+    aes(x = x, y = y, xend = xend, yend = yend,
         color = label, linetype = label),
+    inherit.aes = FALSE,
     linewidth = 3,
-    key_glyph = ggplot2::draw_key_path   # <- makes legend line horizontal
+    key_glyph = ggplot2::draw_key_path
   ) +
   geom_line(linewidth = 5) +
   scale_y_continuous(breaks = seq(0, 0.1, 0.05), limits = c(0, 0.1)) +
   scale_x_continuous(breaks = seq(0, 0.1, 0.05), limits = c(0, 0.1)) +
   scale_color_manual(
-    values = c("Reference"="red","Benchmark"="#4D4D4D","Model 1"="#56B4E9","Model 2"="#E69F00"),
-    breaks = c("Reference","Benchmark","Model 1","Model 2")
+    values = c("Ideal calibration"="red","Current KFRE"="#4D4D4D","KFRE UK"="#56B4E9","KFRE UK Plus"="#E69F00"),
+    breaks = c("Ideal calibration","Current KFRE","KFRE UK","KFRE UK Plus")
   ) +
   scale_linetype_manual(
-    values = c("Reference"="dashed","Benchmark"="dashed","Model 1"="dotdash","Model 2"="solid"),
-    breaks = c("Reference","Benchmark","Model 1","Model 2")
+    values = c("Ideal calibration"="dashed","Current KFRE"="dashed","KFRE UK"="dotdash","KFRE UK Plus"="solid"),
+    breaks = c("Ideal calibration","Current KFRE","KFRE UK","KFRE UK Plus")
   ) +
   guides(
     color = guide_legend(order = 1),
@@ -2247,7 +2566,7 @@ ggsave(version1,filename = "Figure_5cd_V2.jpeg",width = 45,height = 20, dpi=300)
 
 version1 = ((p1 + labs(title = "2 years (Full plot)") + xlab("") + ylab("Observed probabilities"))+(p2 + labs(title = "2 years (Restricted plot)")+ xlab("") + ylab("")))/ ((p3 + labs(title = "5 years (Full plot)")+ xlab("Predicted probabilities") + ylab("Observed probabilities"))+(p4 + labs(title = "5 years (Restricted plot)") + theme(legend.position = "blank") + ylab("") + xlab("Predicted probabilities")))
 
-ggsave(version1,filename = "Figure_5_Final_V2.jpeg",width = 47,height = 42.8, dpi=300)
+ggsave(version1,filename = "Figure_5_Final_V2.jpeg",width = 48.2,height = 42.8, dpi=300)
 
 
 ```
@@ -2257,12 +2576,12 @@ ggsave(version1,filename = "Figure_5_Final_V2.jpeg",width = 47,height = 42.8, dp
 
 ```{r}
 
-figure_5_data1 = subset(figure_5_data,figure_5_data$Time2=="2 years (Full plot)" & figure_5_data$Model=="Benchmark")
+figure_5_data1 = subset(figure_5_data,figure_5_data$Time2=="2 years (Full plot)" & figure_5_data$Model=="Current KFRE")
 
 ideal_line_df <- data.frame(
   slope = 1,
   intercept = 0,
-  label = "Reference"
+  label = "Ideal calibration"
 )
 
 p1 = ggplot(figure_5_data1, aes(
@@ -2283,12 +2602,12 @@ p1 = ggplot(figure_5_data1, aes(
   scale_y_continuous(breaks = seq(0,1,0.2), limits = c(0,1)) +
   scale_x_continuous(breaks = seq(0,1,0.2), limits = c(0,1)) +
   scale_color_manual(
-    values = c("Reference"="red","Benchmark"="#56B4E9"),
-    breaks = c("Reference","Benchmark")
+    values = c("Ideal calibration"="red","Current KFRE"="#56B4E9"),
+    breaks = c("Ideal calibration","Current KFRE")
   ) +
   scale_linetype_manual(
-    values = c("Reference"="dashed","Benchmark"="solid"),
-    breaks = c("Reference","Benchmark")
+    values = c("Ideal calibration"="dashed","Current KFRE"="solid"),
+    breaks = c("Ideal calibration","Current KFRE")
   ) +
   guides(
     color = guide_legend(order = 1),
@@ -2310,7 +2629,7 @@ p1 = ggplot(figure_5_data1, aes(
 ggsave(p1,filename = "Figure_5a_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
 
 
-figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="2 years (Restricted plot)" & figure_5_data$Model=="Benchmark")
+figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="2 years (Restricted plot)" & figure_5_data$Model=="Current KFRE")
 
 p2 = ggplot(figure_5_data2, aes(
   x = risk,
@@ -2333,17 +2652,17 @@ p2 = ggplot(figure_5_data2, aes(
   theme_bw() +
   scale_color_manual(
     values = c(
-      "Reference" = "red",
-      "Benchmark"  = "#56B4E9"
+      "Ideal calibration" = "red",
+      "Current KFRE"  = "#56B4E9"
     ),
-    breaks = c("Reference","Benchmark")
+    breaks = c("Ideal calibration","Current KFRE")
   ) +
   scale_linetype_manual(
     values = c(
-      "Reference" = "dashed",  # <- use character, not 2
-      "Benchmark"  = "solid"
+      "Ideal calibration" = "dashed",  # <- use character, not 2
+      "Current KFRE"  = "solid"
     ),
-    breaks = c("Reference","Benchmark")
+    breaks = c("Ideal calibration","Current KFRE")
   ) +
   guides(
     color = guide_legend(order = 1),
@@ -2376,7 +2695,7 @@ ggsave(version1,filename = "Figure_5ab_V2_Benchmark.jpeg",width = 45,height = 20
 
 ```{r}
 
-figure_5_data1 = subset(figure_5_data,figure_5_data$Time2=="5 years (Full plot)" & figure_5_data$Model=="Benchmark")
+figure_5_data1 = subset(figure_5_data,figure_5_data$Time2=="5 years (Full plot)" & figure_5_data$Model=="Current KFRE")
 
 p3 = ggplot(figure_5_data1, aes(
   x = risk,
@@ -2396,12 +2715,12 @@ p3 = ggplot(figure_5_data1, aes(
   scale_y_continuous(breaks = seq(0,1,0.2), limits = c(0,1)) +
   scale_x_continuous(breaks = seq(0,1,0.2), limits = c(0,1)) +
   scale_color_manual(
-    values = c("Reference"="red","Benchmark"="#56B4E9"),
-    breaks = c("Reference","Benchmark")
+    values = c("Ideal calibration"="red","Current KFRE"="#56B4E9"),
+    breaks = c("Ideal calibration","Current KFRE")
   ) +
   scale_linetype_manual(
-    values = c("Reference"="dashed","Benchmark"="solid"),
-    breaks = c("Reference","Benchmark")
+    values = c("Ideal calibration"="dashed","Current KFRE"="solid"),
+    breaks = c("Ideal calibration","Current KFRE")
   ) +
   guides(
     color = guide_legend(order = 1),
@@ -2423,7 +2742,7 @@ p3 = ggplot(figure_5_data1, aes(
 ggsave(p3,filename = "Figure_5c_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
 
 
-figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="5 years (Restricted plot)" & figure_5_data$Model=="Benchmark")
+figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="5 years (Restricted plot)" & figure_5_data$Model=="Current KFRE")
 
 p4 = ggplot(figure_5_data2, aes(
   x = risk,
@@ -2443,12 +2762,12 @@ p4 = ggplot(figure_5_data2, aes(
   scale_y_continuous(breaks = seq(0, 0.1, 0.05), limits = c(0, 0.1)) +
   scale_x_continuous(breaks = seq(0, 0.1, 0.05), limits = c(0, 0.1)) +
   scale_color_manual(
-    values = c("Reference"="red","Benchmark"="#56B4E9"),
-    breaks = c("Reference","Benchmark")
+    values = c("Ideal calibration"="red","Current KFRE"="#56B4E9"),
+    breaks = c("Ideal calibration","Current KFRE")
   ) +
   scale_linetype_manual(
-    values = c("Reference"="dashed","Benchmark"="solid"),
-    breaks = c("Reference","Benchmark")
+    values = c("Ideal calibration"="dashed","Current KFRE"="solid"),
+    breaks = c("Ideal calibration","Current KFRE")
   ) +
   guides(
     color = guide_legend(order = 1),
@@ -2491,17 +2810,6 @@ ggsave(version1,filename = "Figure_5_Final_V2_Benchmark.jpeg",width = 47,height 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
 ## 6. Combine calibration slopes and intercept for  all models
 
 ```{r}
@@ -2514,7 +2822,9 @@ cal_stats = rbind(benchmark_cal_stats,kfre1_cal_stats,kfre2_cal_stats)
 
 write.csv(cal_stats,"Calibration_stats_all_models.csv",row.names = F)
 
+
 ```
+
 
 
 
