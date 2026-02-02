@@ -42,7 +42,7 @@ library(readstata13)
 ## 1. Benchmark model
 
 ```{r}
-benchmark = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/Benchmark models/Linked data/gold_imputed_data_ready_for_validation.rds")
+benchmark = readRDS("gold_imputed_data_ready_for_validation.rds")
 
 ```
 
@@ -528,8 +528,8 @@ p1=ggplot(benchmark_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
         axis.text=element_text(size=50))
 
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Benchmark_Combined_Plots.jpeg",width = 35,height = 15, dpi=300)
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Benchmark_Combined_Plots.pdf",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "Benchmark_Combined_Plots.jpeg",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "Benchmark_Combined_Plots.pdf",width = 35,height = 15, dpi=300)
 
 ```
 
@@ -555,9 +555,9 @@ p1=ggplot(benchmark_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
         axis.text=element_text(size=50))
 
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Benchmark_Combined_Plots_Restricted.jpeg",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "Benchmark_Combined_Plots_Restricted.jpeg",width = 35,height = 15, dpi=300)
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Benchmark_Combined_Plots_Restricted.pdf",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "Benchmark_Combined_Plots_Restricted.pdf",width = 35,height = 15, dpi=300)
 
 ```
 
@@ -582,9 +582,9 @@ p1=ggplot(benchmark_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
         axis.text=element_text(size=50))
 
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Benchmark_Combined_Plots_Restricted2.jpeg",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "Benchmark_Combined_Plots_Restricted2.jpeg",width = 35,height = 15, dpi=300)
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Benchmark_Combined_Plots_Restricted2.pdf",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "Benchmark_Combined_Plots_Restricted2.pdf",width = 35,height = 15, dpi=300)
 
 ```
 
@@ -640,11 +640,11 @@ start_time0 = Sys.time()
 
 ```{r}
 
-kfre_uk1 = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/KFRE UK 1/IMPUTED/gold_imputed_data_ready_for_validation_kfreuk1.rds")
+kfre_uk1 = readRDS("gold_imputed_data_ready_for_validation_kfreuk1.rds")
 
-kfre_only_model = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/2026/model_info_updated_kfre_only.rds")
+kfre_only_model = readRDS("model_info_updated_kfre_only.rds")
 
-kfre_only_full_model = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/2026/model_full_updated_kfre_only.rds")
+kfre_only_full_model = readRDS("model_full_updated_kfre_only.rds")
 
 
 
@@ -1130,8 +1130,8 @@ p1=ggplot(KFREUK1_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
         axis.text=element_text(size=50))
 
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/KFREUK1_Combined_Plots.jpeg",width = 35,height = 15, dpi=300)
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/KFREUK1_Combined_Plots.pdf",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "KFREUK1_Combined_Plots.jpeg",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "KFREUK1_Combined_Plots.pdf",width = 35,height = 15, dpi=300)
 
 ```
 
@@ -1157,9 +1157,9 @@ p1=ggplot(KFREUK1_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
         axis.text=element_text(size=50))
 
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/KFREUK1_Combined_Plots_Restricted.jpeg",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "KFREUK1_Combined_Plots_Restricted.jpeg",width = 35,height = 15, dpi=300)
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/KFREUK1_Combined_Plots_Restricted.pdf",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "KFREUK1_Combined_Plots_Restricted.pdf",width = 35,height = 15, dpi=300)
 
 ```
 
@@ -1184,9 +1184,9 @@ p1=ggplot(KFREUK1_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
         axis.text=element_text(size=50))
 
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/KFREUK1_Combined_Plots_Restricted2.jpeg",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "KFREUK1_Combined_Plots_Restricted2.jpeg",width = 35,height = 15, dpi=300)
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/KFREUK1_Combined_Plots_Restricted2.pdf",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "KFREUK1_Combined_Plots_Restricted2.pdf",width = 35,height = 15, dpi=300)
 
 ```
 
@@ -1246,11 +1246,11 @@ start_time0 = Sys.time()
 
 ```{r}
 
-kfre_uk2 = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/KFRE UK 2/gold_imputed_data_ready_for_validation_kfreplus.rds")
+kfre_uk2 = readRDS("gold_imputed_data_ready_for_validation_kfreplus.rds")
 
-kfre2_only_model = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/2026/model_info_updated_kfre_plus.rds")
+kfre2_only_model = readRDS("model_info_updated_kfre_plus.rds")
 
-kfre2_only_full_model = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/2026/model_full_updated_kfre_plus.rds")
+kfre2_only_full_model = readRDS("model_full_updated_kfre_plus.rds")
 
 
 kfre_uk2 = kfre_uk2 %>% dplyr::mutate(
@@ -1749,8 +1749,8 @@ p1=ggplot(KFREUK2_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
         axis.text=element_text(size=50))
 
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/KFREUK2_Combined_Plots.jpeg",width = 35,height = 15, dpi=300)
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/KFREUK2_Combined_Plots.pdf",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "KFREUK2_Combined_Plots.jpeg",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "KFREUK2_Combined_Plots.pdf",width = 35,height = 15, dpi=300)
 
 ```
 
@@ -1776,9 +1776,9 @@ p1=ggplot(KFREUK2_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
         axis.text=element_text(size=50))
 
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/KFREUK2_Combined_Plots_Restricted.jpeg",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "KFREUK2_Combined_Plots_Restricted.jpeg",width = 35,height = 15, dpi=300)
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/KFREUK2_Combined_Plots_Restricted.pdf",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "KFREUK2_Combined_Plots_Restricted.pdf",width = 35,height = 15, dpi=300)
 
 ```
 
@@ -1803,9 +1803,9 @@ p1=ggplot(KFREUK2_cal_plot_data,aes(x = risk, y = obs,color=Model)) +
         axis.text=element_text(size=50))
 
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/KFREUK2_Combined_Plots_Restricted2.jpeg",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "KFREUK2_Combined_Plots_Restricted2.jpeg",width = 35,height = 15, dpi=300)
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/KFREUK2_Combined_Plots_Restricted2.pdf",width = 35,height = 15, dpi=300)
+ggsave(p1,filename = "KFREUK2_Combined_Plots_Restricted2.pdf",width = 35,height = 15, dpi=300)
 
 ```
 
@@ -1905,8 +1905,8 @@ p1=ggplot(combined_cal_data_2yrs,aes(x = risk, y = obs,color=Model)) +
 
 plot_2yrs_full = p1
   
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Final_Combined_2years_Plots.jpeg",width = 45,height = 20, dpi=300)
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Final_Combined_2years_Plots.pdf",width = 45,height = 20, dpi=300)
+ggsave(p1,filename = "Final_Combined_2years_Plots.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p1,filename = "Final_Combined_2years_Plots.pdf",width = 45,height = 20, dpi=300)
 
 
 ```
@@ -1932,8 +1932,8 @@ p1=ggplot(combined_cal_data_2yrs,aes(x = risk, y = obs,color=Model)) +
 
 plot_2yrs_restricted = p1
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Final_Combined_2years_PlotsRestricted.jpeg",width = 45,height = 20, dpi=300)
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Final_Combined_2years_PlotsRestricted.pdf",width = 45,height = 20, dpi=300)
+ggsave(p1,filename = "Final_Combined_2years_PlotsRestricted.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p1,filename = "Final_Combined_2years_PlotsRestricted.pdf",width = 45,height = 20, dpi=300)
 
 ```
 
@@ -1965,8 +1965,8 @@ p1=ggplot(combined_cal_data_5yrs,aes(x = risk, y = obs,color=Model)) +
 plot_5yrs_full = p1
 
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Final_Combined_5years_Plots.jpeg",width = 45,height = 20, dpi=300)
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Final_Combined_5years_Plots.pdf",width = 45,height = 20, dpi=300)
+ggsave(p1,filename = "Final_Combined_5years_Plots.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p1,filename = "Final_Combined_5years_Plots.pdf",width = 45,height = 20, dpi=300)
 
 ```
 
@@ -1993,8 +1993,8 @@ p1=ggplot(combined_cal_data_5yrs,aes(x = risk, y = obs,color=Model)) +
 plot_5yrs_restricted = p1
 
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Final_Combined_5years_PlotsRestricted.jpeg",width = 45,height = 20, dpi=300)
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Final_Combined_5years_PlotsRestricted.pdf",width = 45,height = 20, dpi=300)
+ggsave(p1,filename = "Final_Combined_5years_PlotsRestricted.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p1,filename = "Final_Combined_5years_PlotsRestricted.pdf",width = 45,height = 20, dpi=300)
 
 
 ```
@@ -2013,12 +2013,12 @@ library(patchwork)
 
 version1 = (plot_2yrs_full + theme(axis.title.x = element_blank()) + labs(title = "2 years"))/(plot_5yrs_full + labs(title = "5 years"))
 
-ggsave(version1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Final_Full_Plots.jpeg",width = 49,height = 35, dpi=300)
+ggsave(version1,filename = "Final_Full_Plots.jpeg",width = 49,height = 35, dpi=300)
 
 
 # version2 = plot_grid(plot_2yrs_full + theme(axis.title.x = element_blank()),plot_5yrs_full,nrow = 2,labels = c("2 year model","5 year model"),label_size = 50,label_fontface = "bold",label_x = 0.02, label_y = 0.98) 
 # 
-# ggsave(version2,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Final_Full_PlotsV2.jpeg",width = 49,height = 35, dpi=300)
+# ggsave(version2,filename = "Final_Full_PlotsV2.jpeg",width = 49,height = 35, dpi=300)
 
 
 
@@ -2032,7 +2032,7 @@ ggsave(version1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Fin
 
 version1 = (plot_2yrs_restricted + theme(axis.title.x = element_blank()) + labs(title = "2 years"))/(plot_5yrs_restricted + labs(title = "5 years"))
 
-ggsave(version1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Final_Restricteda_Plots.jpeg",width = 49,height = 35, dpi=300)
+ggsave(version1,filename = "Final_Restricteda_Plots.jpeg",width = 49,height = 35, dpi=300)
 
 
 
@@ -2120,7 +2120,7 @@ p1 = ggplot(figure_5_data1, aes(
   )
 
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5a_V2.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p1,filename = "Figure_5a_V2.jpeg",width = 45,height = 20, dpi=300)
 
 
 figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="2 years (Restricted plot)")
@@ -2170,7 +2170,7 @@ library(patchwork)
 
 version1 = (p1 + labs(title = "2 years (Full plot)"))+(p2 + labs(title = "2 years (Restricted plot)"))
 
-ggsave(version1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5ab_V2.jpeg",width = 45,height = 20, dpi=300)
+ggsave(version1,filename = "Figure_5ab_V2.jpeg",width = 45,height = 20, dpi=300)
 
 ```
 
@@ -2218,7 +2218,7 @@ p3 = ggplot(figure_5_data1, aes(
   )
 
   
-ggsave(p3,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5c_V2.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p3,filename = "Figure_5c_V2.jpeg",width = 45,height = 20, dpi=300)
 
 
 figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="5 years (Restricted plot)")
@@ -2267,7 +2267,7 @@ library(patchwork)
 
 version1 = (p3 + labs(title = "5 years (Full plot)"))+(p4 + labs(title = "5 years (Restricted plot)"))
 
-ggsave(version1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5cd_V2.jpeg",width = 45,height = 20, dpi=300)
+ggsave(version1,filename = "Figure_5cd_V2.jpeg",width = 45,height = 20, dpi=300)
 
 
 ```
@@ -2278,7 +2278,7 @@ ggsave(version1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Fin
 
 version1 = ((p1 + labs(title = "2 years (Full plot)") + xlab(""))+(p2 + labs(title = "2 years (Restricted plot)")+ xlab("") + ylab("")))/ ((p3 + labs(title = "5 years (Full plot)"))+(p4 + labs(title = "5 years (Restricted plot)") + theme(legend.position = "blank") + ylab("")))
 
-ggsave(version1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5_Final_V2.jpeg",width = 47,height = 42.8, dpi=300)
+ggsave(version1,filename = "Figure_5_Final_V2.jpeg",width = 47,height = 42.8, dpi=300)
 
 ```
 
@@ -2341,7 +2341,7 @@ p1 = ggplot(figure_5_data1, aes(
   )
 
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5a_V2.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p1,filename = "Figure_5a_V2.jpeg",width = 45,height = 20, dpi=300)
 
 
 figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="2 years (Restricted plot)")
@@ -2409,13 +2409,13 @@ p2 = ggplot(figure_5_data2, aes(
   )
 
   
-ggsave(p2,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5b_V2.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p2,filename = "Figure_5b_V2.jpeg",width = 45,height = 20, dpi=300)
 
 library(patchwork)
 
 version1 = (p1 + labs(title = "2 years (Full plot)"))+(p2 + labs(title = "2 years (Restricted plot)"))
 
-ggsave(version1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5ab_V2.jpeg",width = 45,height = 20, dpi=300)
+ggsave(version1,filename = "Figure_5ab_V2.jpeg",width = 45,height = 20, dpi=300)
 
 ```
 
@@ -2475,7 +2475,7 @@ p3 = ggplot(figure_5_data1, aes(
   )
 
   
-ggsave(p3,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5c_V2.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p3,filename = "Figure_5c_V2.jpeg",width = 45,height = 20, dpi=300)
 
 
 figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="5 years (Restricted plot)")
@@ -2533,13 +2533,13 @@ p4 = ggplot(figure_5_data2, aes(
     legend.key.width = unit(6, "cm") # change to "none" if you really want to hide it
   )
 
-ggsave(p4,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5d_V2.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p4,filename = "Figure_5d_V2.jpeg",width = 45,height = 20, dpi=300)
 
 library(patchwork)
 
 version1 = (p3 + labs(title = "5 years (Full plot)"))+(p4 + labs(title = "5 years (Restricted plot)"))
 
-ggsave(version1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5cd_V2.jpeg",width = 45,height = 20, dpi=300)
+ggsave(version1,filename = "Figure_5cd_V2.jpeg",width = 45,height = 20, dpi=300)
 
 
 ```
@@ -2550,7 +2550,7 @@ ggsave(version1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Fin
 
 version1 = ((p1 + labs(title = "2 years (Full plot)") + xlab("") + ylab("Observed probabilities"))+(p2 + labs(title = "2 years (Restricted plot)")+ xlab("") + ylab("")))/ ((p3 + labs(title = "5 years (Full plot)")+ xlab("Predicted probabilities") + ylab("Observed probabilities"))+(p4 + labs(title = "5 years (Restricted plot)") + theme(legend.position = "blank") + ylab("") + xlab("Predicted probabilities")))
 
-ggsave(version1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5_Final_V2.jpeg",width = 48.2,height = 42.8, dpi=300)
+ggsave(version1,filename = "Figure_5_Final_V2.jpeg",width = 48.2,height = 42.8, dpi=300)
 
 
 ```
@@ -2610,7 +2610,7 @@ p1 = ggplot(figure_5_data1, aes(
   )
 
 
-ggsave(p1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5a_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p1,filename = "Figure_5a_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
 
 
 figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="2 years (Restricted plot)" & figure_5_data$Model=="Current KFRE")
@@ -2665,13 +2665,13 @@ p2 = ggplot(figure_5_data2, aes(
   )
 
   
-ggsave(p2,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5b_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p2,filename = "Figure_5b_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
 
 library(patchwork)
 
 version1 = (p1 + labs(title = "2 years (Full plot)"))+(p2 + labs(title = "2 years (Restricted plot)"))
 
-ggsave(version1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5ab_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
+ggsave(version1,filename = "Figure_5ab_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
 
 ```
 
@@ -2723,7 +2723,7 @@ p3 = ggplot(figure_5_data1, aes(
   )
 
   
-ggsave(p3,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5c_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p3,filename = "Figure_5c_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
 
 
 figure_5_data2 = subset(figure_5_data,figure_5_data$Time2=="5 years (Restricted plot)" & figure_5_data$Model=="Current KFRE")
@@ -2770,13 +2770,13 @@ p4 = ggplot(figure_5_data2, aes(
     legend.key.width = unit(6, "cm") # change to "none" if you really want to hide it
   )
 
-ggsave(p4,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5d_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
+ggsave(p4,filename = "Figure_5d_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
 
 library(patchwork)
 
 version1 = (p3 + labs(title = "5 years (Full plot)"))+(p4 + labs(title = "5 years (Restricted plot)"))
 
-ggsave(version1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5cd_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
+ggsave(version1,filename = "Figure_5cd_V2_Benchmark.jpeg",width = 45,height = 20, dpi=300)
 
 
 ```
@@ -2787,7 +2787,7 @@ ggsave(version1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Fin
 
 version1 = ((p1 + labs(title = "2 years (Full plot)") + xlab("") + ylab("Observed probabilities"))+(p2 + labs(title = "2 years (Restricted plot)")+ xlab("") + ylab("")))/ ((p3 + labs(title = "5 years (Full plot)")+ xlab("Predicted probabilities") + ylab("Observed probabilities"))+(p4 + labs(title = "5 years (Restricted plot)") + theme(legend.position = "blank") + ylab("") + xlab("Predicted probabilities")))
 
-ggsave(version1,filename = "/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/Overall/Pseudo values/Figure_5_Final_V2_Benchmark.jpeg",width = 47,height = 42.8, dpi=300)
+ggsave(version1,filename = "Figure_5_Final_V2_Benchmark.jpeg",width = 47,height = 42.8, dpi=300)
 
 
 ```
