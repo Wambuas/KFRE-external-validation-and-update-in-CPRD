@@ -54,7 +54,6 @@ dat <- aurum_data %>% dplyr::select(PRACTICE_PATIENT_ID,time1,status1)
 
 
 
-
 ```{r}
 
 # ------------------------------------------------------------
