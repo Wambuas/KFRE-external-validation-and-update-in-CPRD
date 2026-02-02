@@ -1011,24 +1011,20 @@ dev_data_kfre1 = readRDS("data_ready_for_model1.rds")
 
 ```
 
+### Import saved model from development
 
 ```{r}
 
-model1 <- CSC(Hist(time, status) ~
-age1 + age2 + eGFR1 + eGFR2 + acr1 + acr2 + male,
-data = dev_data_kfre1,
-fitter = "cph"
-)
-
-fit_csc1 <- model1$models$`Cause 1`
-fit_csc2 <- model1$models$`Cause 2`
+kfre_only_full_model = readRDS("model_full_updated_kfre_only.rds")
 
 
 ```
 
 
 ```{r}
-dev_data_kfre1$LP = predict(fit_csc1, type = "lp")
+
+dev_data_kfre1$LP = predict(kfre_only_full_model$models$`Cause 1`, type = "lp")
+
 ```
 
 
@@ -1933,25 +1929,22 @@ dev_data_kfre2 = readRDS("data_ready_for_model2.rds")
 
 ```
 
+### Import saved model from development
 
 ```{r}
 
-model2 <- CSC(Hist(time, status) ~
-age1 + age2 + eGFR1 + eGFR2 + acr1 + acr2 + male + diabetic + black_ethnicity+asian_ethnicity+mixed_ethnicity+other_ethnicity+unknown_ethnicity,
-data = dev_data_kfre2,
-fitter = "cph"
-)
+kfre2_only_full_model = readRDS("model_full_updated_kfre_plus.rds")
 
-fit_csc1 <- model2$models$`Cause 1`
-fit_csc2 <- model2$models$`Cause 2`
 
 ```
 
 
-
 ```{r}
-dev_data_kfre2$LP = predict(fit_csc1, type = "lp")
+
+dev_data_kfre2$LP = predict(kfre2_only_full_model$models$`Cause 1`, type = "lp")
+
 ```
+
 
 
 
