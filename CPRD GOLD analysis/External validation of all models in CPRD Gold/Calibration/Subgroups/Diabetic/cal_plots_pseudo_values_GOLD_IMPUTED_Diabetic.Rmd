@@ -641,14 +641,14 @@ start_time0 = Sys.time()
 
 ```{r}
 
-kfre_uk1 = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/KFRE UK 1/IMPUTED/gold_imputed_data_ready_for_validation_kfreuk1.rds")
+kfre_uk1 = readRDS("gold_imputed_data_ready_for_validation_kfreuk1.rds")
 
 kfre_uk1 = subset(kfre_uk1,kfre_uk1$diabetic==1)
 
 
-kfre_only_model = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/2026/model_info_updated_kfre_only.rds")
+kfre_only_model = readRDS("model_info_updated_kfre_only.rds")
 
-kfre_only_full_model = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/2026/model_full_updated_kfre_only.rds")
+kfre_only_full_model = readRDS("model_full_updated_kfre_only.rds")
 
 
 
@@ -1256,11 +1256,11 @@ start_time0 = Sys.time()
 
 
 
-kfre_uk2 = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/KFRE UK models/Calibration/Linked data/KFRE UK 2/gold_imputed_data_ready_for_validation_kfreplus.rds")
+kfre_uk2 = readRDS("gold_imputed_data_ready_for_validation_kfreplus.rds")
 
-kfre2_only_model = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/2026/model_info_updated_kfre_plus.rds")
+kfre2_only_model = readRDS("model_info_updated_kfre_plus.rds")
 
-kfre2_only_full_model = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/2026/model_full_updated_kfre_plus.rds")
+kfre2_only_full_model = readRDS("model_full_updated_kfre_plus.rds")
 
 
 kfre_uk2 = kfre_uk2 %>% dplyr::mutate(
