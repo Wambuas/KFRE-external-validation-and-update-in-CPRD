@@ -66,108 +66,193 @@ imputed_data_with_scores = imputed_data_with_scores %>% dplyr::select(
 ```
 
 
+
+## 1. Decision curve - stdca
+
+### Import stdca function from https://github.com/survival-lumc/ValidationCompRisks/tree/main/R
+
 ```{r}
-imputed_data_with_scores$status_cause1 = ifelse(imputed_data_with_scores$status1==1,1,0)
+source(here::here("stdca.R"))
+
 ```
 
+```{r}
+options(bitmapType='cairo')
+```
 
-### Decision curve
+### 2 years
 
-#### 2 years
+#### Benchmark
 
 ```{r}
-pdf("Decision_Curve_2_years_BenchmarkOnly.pdf")
 
-dca(Surv(time1, status_cause1)~score_2yrs_Benchmark,
-    data = imputed_data_with_scores,
-    time = 2,
-    thresholds = seq(0, 1, 0.01),
-    label = list(score_2yrs_Benchmark="Benchmark"))%>% standardized_net_benefit() -> p1
+# 1) Run stdca across all thresholds up to 1
+dca_vdata <- stdca(
+  data      = clinical_utility_data,
+  outcome   = "status1",
+  ttoutcome = "time1",
+  timepoint = 2,
+  predictors = "score_2yrs_Benchmark",
+  xstop     = 0.5,      # evaluate thresholds up to 1.0
+  ymin      = -0.01,
+  graph     = FALSE,
+  cmprsk    = TRUE
+)
 
-print(p1)
+# 2) Save plot
+png(
+  filename = "decision_curve_Benchmark_2yrs_stdca.png",
+  width  = 2000,
+  height = 1600,
+  res    = 300
+)
+
+oldpar <- par(
+  xaxs = "i",
+  yaxs = "i",
+  las  = 1,
+  mar  = c(6.1, 5.8, 4.1, 2.1),
+  mgp  = c(4.25, 1, 0)
+)
+
+nb <- dca_vdata$net.benefit
+
+# Y-limits: use the observed range (robust) so the full curve is visible
+yl <- c(-0.005, 0.005)
+
+plot(
+  nb$threshold,
+  nb$score_2yrs_Benchmark,
+  type = "l",
+  lwd  = 2,
+  lty  = 1,
+  xlab = "",
+  ylab = "Net Benefit",
+  xlim = c(0, 0.5),
+  ylim = yl,
+  bty  = "n",
+  xaxt = "n"
+)
+
+lines(nb$threshold, nb$none, type = "l", lwd = 2, lty = 4, col = "black")
+lines(nb$threshold, nb$all,  type = "l", lwd = 2, col = "darkgray")
+
+legend(
+  "topright",
+  c("Treat all", "Treat none", "Prediction model"),
+  lwd = c(2, 2, 2),
+  lty = c(1, 4, 1),
+  col = c("darkgray", "black", "black"),
+  bty = "n"
+)
+
+# Primary x-axis: 0 to 1
+axis(1, at = seq(0, 1, by = 0.1))
+
+# Secondary x-axis: harm:benefit ratio (p_t : 1-p_t) for 0.1 to 0.9
+axis(
+  1,
+  pos = par("usr")[3] - 0.12 * diff(par("usr")[3:4]),  # place below plot area
+  at = c(0.1, 0.2, 0.3, 0.4, 0.5),
+  labels = c("1:9", "1:4", "3:7", "2:3", "1:1")
+)
+
+mtext("Threshold probability", 1, line = 2)
+mtext("Harm to benefit ratio", 1, line = 5)
+title("Validation data (2 years)")
+
+par(oldpar)
 dev.off()
 
-
 ```
 
 
-```{r}
-
-x=dca(Surv(time1, status_cause1)~score_2yrs_Benchmark,
-    data = imputed_data_with_scores,
-    time = 2,
-    thresholds = seq(0, 1, 0.01),
-    label = list(score_2yrs_Benchmark="Benchmark")) %>% standardized_net_benefit()
 
 
-p2=as_tibble(x) %>%
-  dplyr::filter(!is.na(standardized_net_benefit)) %>%
-  ggplot(aes(x = threshold, y = standardized_net_benefit, color = label)) +
-  stat_smooth(method = "loess", se = FALSE, formula = "y ~ x", 
-    span = 0.33,size=5) +
-  coord_cartesian(ylim = c(-0.06, 1)) +
-  scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
-  labs(x = "Threshold Probability", y = "Standardized Net Benefit", 
-    color = "") +
-  theme_bw()+theme(text = element_text(size=50,face="bold"),
-        axis.title=element_text(size=50,face="bold"),
-        axis.text.x = element_text(angle=90, hjust=1,vjust = 1,size = 50),
-        axis.text.y = element_text(size = 50),
-        axis.text=element_text(size=50))
+### 5 years
 
-ggsave(p2,filename = "Decision_Curve_2_years_BenchmarkOnlly.jpeg",width = 35,height = 30, dpi=300)
-
-
-```
-
-
-#### 5 years
+#### Benchmark
 
 ```{r}
 
-pdf("Decision_Curve_5_years_BenchmarkOnly.pdf")
+# 1) Run stdca across all thresholds up to 1
+dca_vdata <- stdca(
+  data      = clinical_utility_data,
+  outcome   = "status1",
+  ttoutcome = "time1",
+  timepoint = 5,
+  predictors = "score_5yrs_Benchmark",
+  xstop     = 0.5,      # evaluate thresholds up to 1.0
+  ymin      = -0.01,
+  graph     = FALSE,
+  cmprsk    = TRUE
+)
 
-dca(Surv(time1, status_cause1)~score_5yrs_Benchmark,
-    data = imputed_data_with_scores,
-    time = 5,
-    thresholds = seq(0, 1, 0.01),
-    label = list(score_5yrs_Benchmark="Benchmark"))%>% standardized_net_benefit() -> p1
+# 2) Save plot
+png(
+  filename = "decision_curve_Benchmark_5yrs_stdca.png",
+  width  = 2000,
+  height = 1600,
+  res    = 300
+)
 
-print(p1)
+oldpar <- par(
+  xaxs = "i",
+  yaxs = "i",
+  las  = 1,
+  mar  = c(6.1, 5.8, 4.1, 2.1),
+  mgp  = c(4.25, 1, 0)
+)
+
+nb <- dca_vdata$net.benefit
+
+write.csv(nb,"NetBenefit5years.csv")
+
+# Y-limits: use the observed range (robust) so the full curve is visible
+yl <- c(-0.005, 0.005)
+plot(
+  nb$threshold,
+  nb$score_5yrs_Benchmark,
+  type = "l",
+  lwd  = 2,
+  lty  = 1,
+  xlab = "",
+  ylab = "Net Benefit",
+  xlim = c(0, 0.5),
+  ylim = yl,
+  bty  = "n",
+  xaxt = "n"
+)
+
+lines(nb$threshold, nb$none, type = "l", lwd = 2, lty = 4, col = "black")
+lines(nb$threshold, nb$all,  type = "l", lwd = 2, col = "darkgray")
+
+legend(
+  "topright",
+  c("Treat all", "Treat none", "Prediction model"),
+  lwd = c(2, 2, 2),
+  lty = c(1, 4, 1),
+  col = c("darkgray", "black", "black"),
+  bty = "n"
+)
+
+# Primary x-axis: 0 to 1
+axis(1, at = seq(0, 1, by = 0.1))
+
+# Secondary x-axis: harm:benefit ratio (p_t : 1-p_t) for 0.1 to 0.9
+axis(
+  1,
+  pos = par("usr")[3] - 0.12 * diff(par("usr")[3:4]),  # place below plot area
+  at = c(0.1, 0.2, 0.3, 0.4, 0.5),
+  labels = c("1:9", "1:4", "3:7", "2:3", "1:1")
+)
+
+mtext("Threshold probability", 1, line = 2)
+mtext("Harm to benefit ratio", 1, line = 5)
+title("5 years")
+
+par(oldpar)
 dev.off()
 
-
 ```
-
-
-```{r}
-
-x=dca(Surv(time1, status_cause1)~score_5yrs_Benchmark,
-    data = imputed_data_with_scores,
-    time = 5,
-    thresholds = seq(0, 1, 0.01),
-    label = list(score_5yrs_Benchmark="Benchmark")) %>% standardized_net_benefit()
-
-
-#x1=x[["dca"]]
-
-p5=as_tibble(x) %>%
-  dplyr::filter(!is.na(standardized_net_benefit)) %>%
-  ggplot(aes(x = threshold, y = standardized_net_benefit, color = label)) +
-  stat_smooth(method = "loess", se = FALSE, formula = "y ~ x", 
-    span = 0.33,size=5) +
-  coord_cartesian(ylim = c(-0.06, 1)) +
-  scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
-  labs(x = "Threshold Probability", y = "Standardized Net Benefit", 
-    color = "") +
-  theme_bw()+theme(text = element_text(size=50,face="bold"),
-        axis.title=element_text(size=50,face="bold"),
-        axis.text.x = element_text(angle=90, hjust=1,vjust = 1,size = 50),
-        axis.text.y = element_text(size = 50),
-        axis.text=element_text(size=50))
-
-ggsave(p5,filename = "Decision_Curve_5_years_BenchmarkOnlly.jpeg",width = 35,height = 30, dpi=300)
-
-```
-
 
