@@ -1,0 +1,1180 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+rm(list = ls())
+
+library(tidyverse)
+library(riskRegression)
+library(plyr)
+#library(tidysurv)
+library(data.table)
+library(stringr)
+library(parallel)
+library(tableone)
+library(muhaz)
+library(survival)
+library(Hmisc)
+library(MASS)
+library(mfp)
+library(reshape2)
+library(flexsurv)
+library(devtools)
+library(prodlim)
+library(rms)
+library(rstpm2)
+library(survcomp)
+library(glmnet)
+library(caret)
+library(sjPlot)
+library(knitr)
+library(webshot)
+library(pROC)
+library(rmda)
+library(pseudo)
+library(lava)
+library(pec)
+library(mice)
+library(miceadds)
+
+```
+
+
+# Model
+
+
+## 1. Benchmark model
+
+```{r}
+benchmark = readRDS("gold_imputed_data_ready_for_validation.rds")
+
+benchmark = subset(benchmark,benchmark$ethnicity=="White")
+
+```
+
+### Calculating the risk scores using the Benchmark model
+
+```{r}
+
+s2_benchmark = 0.9878
+s5_benchmark = 0.9570
+
+x = benchmark %>% dplyr::mutate(
+
+  sex=ifelse(female== 0, 1, 0),
+  logACR = ACR_value,
+  age = Age2,
+  age1 = age/10,
+  egfr1 = EGFR2/5,
+
+  LP = ((-0.2201*(age1-7.036))
+                  + (0.2467*(sex-0.5642))
+                  - (0.5567*(egfr1-7.222))+
+                    (0.4510*(logACR-5.137))),
+   ### 2 years
+  score_2yrs_Benchmark = (1-(s2_benchmark ^ exp(LP))),
+   ### 5 years
+  score_5yrs_Benchmark = (1-(s5_benchmark ^ exp(LP))),
+
+
+  time2yrs = ifelse(time1>2,2,time1),
+  time5yrs = ifelse(time1>5,5,time1),
+  status2yrs = ifelse(time1>2,0,status1),
+  status5yrs = ifelse(time1>5,0,status1),
+  patient_id = PRACTICE_PATIENT_ID)
+
+```
+
+
+
+```{r}
+
+benchmark_scores_mg_per_g = x %>% dplyr::select(
+  patient_id,
+  time1,status1,
+  score_2yrs_Benchmark,
+  score_5yrs_Benchmark) %>% dplyr::rename(PRACTICE_PATIENT_ID=patient_id)
+
+
+```
+
+
+```{r}
+
+table(benchmark_scores_mg_per_g$status1)
+
+```
+
+
+## KFRE UK 2
+
+
+#### Calculating the risk scores using the KFREUK2 model
+
+```{r}
+
+kfre_uk2 = readRDS("gold_imputed_data_ready_for_validation_kfreplus.rds")
+
+kfre2_only_model = readRDS("model_info_updated_kfre_plus.rds")
+
+kfre2_only_full_model = readRDS("model_full_updated_kfre_plus.rds")
+
+
+kfre_uk2 = kfre_uk2 %>% dplyr::mutate(
+
+  male=ifelse(female== 0, 1, 0),
+    acr1 = (ACR_value/100),
+    acr2 = log(ACR_value/100),
+  age1 = (Age2/100)^-1,
+  age2 = (Age2/100)^3,
+  eGFR1 = log(EGFR2/100),
+  eGFR2 = (EGFR2/100)^0.5,
+  
+  black_ethnicity = ifelse(ethnicity=="Black",1,0),
+  white_ethnicity = ifelse(ethnicity=="White",1,0),
+  asian_ethnicity = ifelse(ethnicity=="South Asian",1,0),
+  mixed_ethnicity = ifelse(ethnicity=="Mixed race",1,0),
+  other_ethnicity = ifelse(ethnicity=="Others",1,0),
+  unknown_ethnicity = ifelse(ethnicity=="Unknown",1,0),
+  
+  patient_id = PRACTICE_PATIENT_ID)
+
+kfre_uk2 = subset(kfre_uk2,kfre_uk2$ethnicity=="White")
+
+kfre_uk2$LP = predict(kfre2_only_full_model$models$`Cause 1`,newdata = kfre_uk2, type = "lp")
+
+kfre_uk2$score_2yrs_KFREUK2 <- riskRegression::predictRisk(
+  kfre2_only_full_model,
+  cause = 1,
+  newdata = kfre_uk2,
+  times = 2)
+
+kfre_uk2$score_5yrs_KFREUK2 <- riskRegression::predictRisk(
+  kfre2_only_full_model,
+  cause = 1,
+  newdata = kfre_uk2,
+  times = 5)
+
+
+
+kfre_uk2 = kfre_uk2 %>% dplyr::select(
+  patient_id,
+  time1,status1,
+  LP,
+  score_2yrs_KFREUK2,
+  score_5yrs_KFREUK2)
+
+
+x = kfre_uk2
+
+```
+
+
+```{r}
+
+KFREUK_scores_mg_per_g = x %>% dplyr::select(
+  patient_id,
+  score_2yrs_KFREUK2,
+  score_5yrs_KFREUK2) %>% dplyr::rename(PRACTICE_PATIENT_ID=patient_id)
+
+
+```
+
+
+## KFRE UK 1
+
+#### Calculating the risk scores using the KFREUK1 model
+
+```{r}
+
+kfre_uk1 = readRDS("gold_imputed_data_ready_for_validation_kfreuk1.rds")
+
+kfre_uk1 = subset(kfre_uk1,kfre_uk1$ethnicity=="White")
+
+
+kfre_only_model = readRDS("model_info_updated_kfre_only.rds")
+
+kfre_only_full_model = readRDS("model_full_updated_kfre_only.rds")
+
+
+
+kfre_uk1 = kfre_uk1 %>% dplyr::mutate(
+
+  male=ifelse(female== 0, 1, 0),
+    acr1 = ACR_value/100,
+    acr2 = log(ACR_value/100),
+  age1 = (Age2/100)^-1,
+  age2 = (Age2/100)^3,
+  eGFR1 = log(EGFR2/100),
+  eGFR2 = (EGFR2/100)^0.5,
+  patient_id = PRACTICE_PATIENT_ID)
+
+
+kfre_uk1$LP = predict(kfre_only_full_model$models$`Cause 1`,newdata = kfre_uk1, type = "lp")
+
+kfre_uk1$score_2yrs_KFREUK1 <- riskRegression::predictRisk(
+  kfre_only_full_model,
+  cause = 1,
+  newdata = kfre_uk1,
+  times = 2)
+
+kfre_uk1$score_5yrs_KFREUK1 <- riskRegression::predictRisk(
+  kfre_only_full_model,
+  cause = 1,
+  newdata = kfre_uk1,
+  times = 5)
+
+
+
+kfre_uk1 = kfre_uk1 %>% dplyr::select(
+  patient_id,
+  time1,status1,
+  LP,
+  score_2yrs_KFREUK1,
+  score_5yrs_KFREUK1)
+
+x = kfre_uk1
+
+```
+
+
+
+
+
+
+
+```{r}
+
+KFREUK1_scores_mg_per_g = x %>% dplyr::select(
+  patient_id,
+  score_2yrs_KFREUK1,
+  score_5yrs_KFREUK1) %>% dplyr::rename(PRACTICE_PATIENT_ID=patient_id)
+
+```
+
+
+
+### Merge the scores
+
+```{r}
+
+clinical_utility_data = left_join(benchmark_scores_mg_per_g,KFREUK_scores_mg_per_g,by=c("PRACTICE_PATIENT_ID"))
+
+clinical_utility_data = left_join(clinical_utility_data,KFREUK1_scores_mg_per_g,by=c("PRACTICE_PATIENT_ID"))
+
+
+```
+
+
+```{r}
+
+table(clinical_utility_data$status1)
+
+
+```
+
+
+```{r}
+clinical_utility_data$status_cause1 = ifelse(clinical_utility_data$status1==1,1,0)
+```
+
+
+## 1. Decision curve - stdca
+
+```{r}
+source(here::here("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Clinical utility/mg per g for ACR/stdca.R"))
+
+```
+
+```{r}
+options(bitmapType='cairo')
+```
+
+### 2 years
+
+#### Benchmark
+
+```{r}
+
+# 1) Run stdca across all thresholds up to 1
+dca_vdata <- stdca(
+  data      = clinical_utility_data,
+  outcome   = "status1",
+  ttoutcome = "time1",
+  timepoint = 2,
+  predictors = "score_2yrs_Benchmark",
+  xstop     = 0.5,      # evaluate thresholds up to 1.0
+  ymin      = -0.01,
+  graph     = FALSE,
+  cmprsk    = TRUE
+)
+
+# 2) Save plot
+png(
+  filename = "decision_curve_Benchmark_2yrs_stdca.png",
+  width  = 2000,
+  height = 1600,
+  res    = 300
+)
+
+oldpar <- par(
+  xaxs = "i",
+  yaxs = "i",
+  las  = 1,
+  mar  = c(6.1, 5.8, 4.1, 2.1),
+  mgp  = c(4.25, 1, 0)
+)
+
+nb <- dca_vdata$net.benefit
+
+# Y-limits: use the observed range (robust) so the full curve is visible
+yl <- c(-0.005, 0.005)
+
+plot(
+  nb$threshold,
+  nb$score_2yrs_Benchmark,
+  type = "l",
+  lwd  = 2,
+  lty  = 1,
+  xlab = "",
+  ylab = "Net Benefit",
+  xlim = c(0, 0.5),
+  ylim = yl,
+  bty  = "n",
+  xaxt = "n"
+)
+
+lines(nb$threshold, nb$none, type = "l", lwd = 2, lty = 4, col = "black")
+lines(nb$threshold, nb$all,  type = "l", lwd = 2, col = "darkgray")
+
+legend(
+  "topright",
+  c("Treat all", "Treat none", "Prediction model"),
+  lwd = c(2, 2, 2),
+  lty = c(1, 4, 1),
+  col = c("darkgray", "black", "black"),
+  bty = "n"
+)
+
+# Primary x-axis: 0 to 1
+axis(1, at = seq(0, 1, by = 0.1))
+
+# Secondary x-axis: harm:benefit ratio (p_t : 1-p_t) for 0.1 to 0.9
+axis(
+  1,
+  pos = par("usr")[3] - 0.12 * diff(par("usr")[3:4]),  # place below plot area
+  at = c(0.1, 0.2, 0.3, 0.4, 0.5),
+  labels = c("1:9", "1:4", "3:7", "2:3", "1:1")
+)
+
+mtext("Threshold probability", 1, line = 2)
+mtext("Harm to benefit ratio", 1, line = 5)
+title("Validation data (2 years)")
+
+par(oldpar)
+dev.off()
+
+```
+
+
+#### Model 1
+
+```{r}
+
+# 1) Run stdca across all thresholds up to 1
+dca_vdata <- stdca(
+  data      = clinical_utility_data,
+  outcome   = "status1",
+  ttoutcome = "time1",
+  timepoint = 2,
+  predictors = "score_2yrs_KFREUK1",
+  xstop     = 0.5,      # evaluate thresholds up to 1.0
+  ymin      = -0.01,
+  graph     = FALSE,
+  cmprsk    = TRUE
+)
+
+# 2) Save plot
+png(
+  filename = "decision_curve_Model1_2yrs_stdca.png",
+  width  = 2000,
+  height = 1600,
+  res    = 300
+)
+
+oldpar <- par(
+  xaxs = "i",
+  yaxs = "i",
+  las  = 1,
+  mar  = c(6.1, 5.8, 4.1, 2.1),
+  mgp  = c(4.25, 1, 0)
+)
+
+nb <- dca_vdata$net.benefit
+
+# Y-limits: use the observed range (robust) so the full curve is visible
+yl <- c(-0.005, 0.005)
+
+plot(
+  nb$threshold,
+  nb$score_2yrs_KFREUK1,
+  type = "l",
+  lwd  = 2,
+  lty  = 1,
+  xlab = "",
+  ylab = "Net Benefit",
+  xlim = c(0, 0.5),
+  ylim = yl,
+  bty  = "n",
+  xaxt = "n"
+)
+
+lines(nb$threshold, nb$none, type = "l", lwd = 2, lty = 4, col = "black")
+lines(nb$threshold, nb$all,  type = "l", lwd = 2, col = "darkgray")
+
+legend(
+  "topright",
+  c("Treat all", "Treat none", "Prediction model"),
+  lwd = c(2, 2, 2),
+  lty = c(1, 4, 1),
+  col = c("darkgray", "black", "black"),
+  bty = "n"
+)
+
+# Primary x-axis: 0 to 1
+axis(1, at = seq(0, 1, by = 0.1))
+
+# Secondary x-axis: harm:benefit ratio (p_t : 1-p_t) for 0.1 to 0.9
+axis(
+  1,
+  pos = par("usr")[3] - 0.12 * diff(par("usr")[3:4]),  # place below plot area
+  at = c(0.1, 0.2, 0.3, 0.4, 0.5),
+  labels = c("1:9", "1:4", "3:7", "2:3", "1:1")
+)
+
+mtext("Threshold probability", 1, line = 2)
+mtext("Harm to benefit ratio", 1, line = 5)
+title("Validation data (2 years)")
+
+par(oldpar)
+dev.off()
+
+```
+
+
+
+#### Model 2
+
+```{r}
+
+# 1) Run stdca across all thresholds up to 1
+dca_vdata <- stdca(
+  data      = clinical_utility_data,
+  outcome   = "status1",
+  ttoutcome = "time1",
+  timepoint = 2,
+  predictors = "score_2yrs_KFREUK2",
+  xstop     = 0.5,      # evaluate thresholds up to 1.0
+  ymin      = -0.01,
+  graph     = FALSE,
+  cmprsk    = TRUE
+)
+
+# 2) Save plot
+png(
+  filename = "decision_curve_Model2_2yrs_stdca.png",
+  width  = 2000,
+  height = 1600,
+  res    = 300
+)
+
+oldpar <- par(
+  xaxs = "i",
+  yaxs = "i",
+  las  = 1,
+  mar  = c(6.1, 5.8, 4.1, 2.1),
+  mgp  = c(4.25, 1, 0)
+)
+
+nb <- dca_vdata$net.benefit
+
+# Y-limits: use the observed range (robust) so the full curve is visible
+yl <- c(-0.005, 0.005)
+
+plot(
+  nb$threshold,
+  nb$score_2yrs_KFREUK2,
+  type = "l",
+  lwd  = 2,
+  lty  = 1,
+  xlab = "",
+  ylab = "Net Benefit",
+  xlim = c(0, 0.5),
+  ylim = yl,
+  bty  = "n",
+  xaxt = "n"
+)
+
+lines(nb$threshold, nb$none, type = "l", lwd = 2, lty = 4, col = "black")
+lines(nb$threshold, nb$all,  type = "l", lwd = 2, col = "darkgray")
+
+legend(
+  "topright",
+  c("Treat all", "Treat none", "Prediction model"),
+  lwd = c(2, 2, 2),
+  lty = c(1, 4, 1),
+  col = c("darkgray", "black", "black"),
+  bty = "n"
+)
+
+# Primary x-axis: 0 to 1
+axis(1, at = seq(0, 1, by = 0.1))
+
+# Secondary x-axis: harm:benefit ratio (p_t : 1-p_t) for 0.1 to 0.9
+axis(
+  1,
+  pos = par("usr")[3] - 0.12 * diff(par("usr")[3:4]),  # place below plot area
+  at = c(0.1, 0.2, 0.3, 0.4, 0.5),
+  labels = c("1:9", "1:4", "3:7", "2:3", "1:1")
+)
+
+mtext("Threshold probability", 1, line = 2)
+mtext("Harm to benefit ratio", 1, line = 5)
+title("Validation data (2 years)")
+
+par(oldpar)
+dev.off()
+
+```
+
+
+#### Combine the three models
+
+
+```{r}
+# ------------------------------------------------------------
+# 2-year decision curve analysis (stdca) with 3 models on ONE plot
+# Benchmark vs Model 1 vs Model 2
+# Different colours + different line types
+# ------------------------------------------------------------
+
+# Run stdca once with all 3 predictors
+dca_vdata <- stdca(
+  data      = clinical_utility_data,
+  outcome   = "status1",
+  ttoutcome = "time1",
+  timepoint = 2,
+  predictors = c("score_2yrs_Benchmark", "score_2yrs_KFREUK1", "score_2yrs_KFREUK2"),
+  xstop     = 0.5,
+  ymin      = -0.01,
+  graph     = FALSE,
+  cmprsk    = TRUE
+)
+
+# Save plot
+png(
+  filename = "decision_curve_2yrs_all3models_stdca.png",
+  width  = 2000,
+  height = 1600,
+  res    = 300
+)
+
+oldpar <- par(
+  xaxs = "i",
+  yaxs = "i",
+  las  = 1,
+  mar  = c(6.1, 5.8, 4.1, 2.1),
+  mgp  = c(4.25, 1, 0)
+)
+
+nb <- dca_vdata$net.benefit
+
+nb <- dca_vdata$net.benefit
+
+# Robust y-limits across all curves
+yl <- c(-0.0005, 0.002)
+
+# Styling for the 3 models
+model_cols <- c(
+  "score_2yrs_Benchmark" = "#1B9E77",
+  "score_2yrs_KFREUK1"   = "#7570B3",
+  "score_2yrs_KFREUK2"   = "#D95F02"
+)
+
+model_ltys <- c(
+  "score_2yrs_Benchmark" = 1,  # solid
+  "score_2yrs_KFREUK1"   = 2,  # dashed
+  "score_2yrs_KFREUK2"   = 3   # dotted
+)
+
+model_labs <- c(
+  "score_2yrs_Benchmark" = "Current KFRE",
+  "score_2yrs_KFREUK1"   = "KFRE UK",
+  "score_2yrs_KFREUK2"   = "KFRE UK Plus"
+)
+
+# Base plot: Benchmark
+plot(
+  nb$threshold,
+  nb$score_2yrs_Benchmark,
+  type = "l",
+  lwd  = 2,
+  lty  = model_ltys["score_2yrs_Benchmark"],
+  col  = model_cols["score_2yrs_Benchmark"],
+  xlab = "",
+  ylab = "Net Benefit",
+  xlim = c(0, 0.5),
+  ylim = yl,
+  bty  = "n",
+  xaxt = "n"
+)
+
+# Add Model 1 and Model 2
+lines(nb$threshold, nb$score_2yrs_KFREUK1, lwd = 2, lty = model_ltys["score_2yrs_KFREUK1"], col = model_cols["score_2yrs_KFREUK1"])
+lines(nb$threshold, nb$score_2yrs_KFREUK2, lwd = 2, lty = model_ltys["score_2yrs_KFREUK2"], col = model_cols["score_2yrs_KFREUK2"])
+
+# Treat none / treat all
+lines(nb$threshold, nb$none, lwd = 2, lty = 4, col = "black")
+lines(nb$threshold, nb$all,  lwd = 2, lty = 1, col = "darkgray")
+
+# Legend
+legend(
+  "topright",
+  legend = c("Treat all", "Treat none", unname(model_labs)),
+  col    = c("darkgray", "black", unname(model_cols)),
+  lwd    = c(2, 2, rep(2, 3)),
+  lty    = c(1, 4, unname(model_ltys)),
+  bty    = "n"
+)
+
+# Primary x-axis: 0 to 1
+axis(1, at = seq(0, 1, by = 0.1))
+
+# Secondary x-axis: harm:benefit ratio for 0.1 to 0.9
+axis(
+  1,
+  pos = par("usr")[3] - 0.12 * diff(par("usr")[3:4]),
+  at = c(0.1, 0.2, 0.3, 0.4, 0.5),
+  labels = c("1:9", "1:4", "3:7", "2:3", "1:1")
+)
+
+mtext("Threshold probability", 1, line = 2)
+mtext("Harm to benefit ratio", 1, line = 5)
+title("2 years")
+
+par(oldpar)
+dev.off()
+
+
+
+nb = data.frame(nb)
+write.csv(nb,"NetBenefit2years.csv")
+
+```
+
+
+### 5 years
+
+#### Benchmark
+
+```{r}
+
+# 1) Run stdca across all thresholds up to 1
+dca_vdata <- stdca(
+  data      = clinical_utility_data,
+  outcome   = "status1",
+  ttoutcome = "time1",
+  timepoint = 5,
+  predictors = "score_5yrs_Benchmark",
+  xstop     = 0.5,      # evaluate thresholds up to 1.0
+  ymin      = -0.01,
+  graph     = FALSE,
+  cmprsk    = TRUE
+)
+
+# 2) Save plot
+png(
+  filename = "decision_curve_Benchmark_5yrs_stdca.png",
+  width  = 2000,
+  height = 1600,
+  res    = 300
+)
+
+oldpar <- par(
+  xaxs = "i",
+  yaxs = "i",
+  las  = 1,
+  mar  = c(6.1, 5.8, 4.1, 2.1),
+  mgp  = c(4.25, 1, 0)
+)
+
+nb <- dca_vdata$net.benefit
+
+write.csv(nb,"NetBenefit5years.csv")
+
+# Y-limits: use the observed range (robust) so the full curve is visible
+yl <- c(-0.005, 0.005)
+plot(
+  nb$threshold,
+  nb$score_5yrs_Benchmark,
+  type = "l",
+  lwd  = 2,
+  lty  = 1,
+  xlab = "",
+  ylab = "Net Benefit",
+  xlim = c(0, 0.5),
+  ylim = yl,
+  bty  = "n",
+  xaxt = "n"
+)
+
+lines(nb$threshold, nb$none, type = "l", lwd = 2, lty = 4, col = "black")
+lines(nb$threshold, nb$all,  type = "l", lwd = 2, col = "darkgray")
+
+legend(
+  "topright",
+  c("Treat all", "Treat none", "Prediction model"),
+  lwd = c(2, 2, 2),
+  lty = c(1, 4, 1),
+  col = c("darkgray", "black", "black"),
+  bty = "n"
+)
+
+# Primary x-axis: 0 to 1
+axis(1, at = seq(0, 1, by = 0.1))
+
+# Secondary x-axis: harm:benefit ratio (p_t : 1-p_t) for 0.1 to 0.9
+axis(
+  1,
+  pos = par("usr")[3] - 0.12 * diff(par("usr")[3:4]),  # place below plot area
+  at = c(0.1, 0.2, 0.3, 0.4, 0.5),
+  labels = c("1:9", "1:4", "3:7", "2:3", "1:1")
+)
+
+mtext("Threshold probability", 1, line = 2)
+mtext("Harm to benefit ratio", 1, line = 5)
+title("5 years")
+
+par(oldpar)
+dev.off()
+
+```
+
+
+#### Model 1
+
+```{r}
+
+# 1) Run stdca across all thresholds up to 1
+dca_vdata <- stdca(
+  data      = clinical_utility_data,
+  outcome   = "status1",
+  ttoutcome = "time1",
+  timepoint = 5,
+  predictors = "score_5yrs_KFREUK1",
+  xstop     = 0.5,      # evaluate thresholds up to 1.0
+  ymin      = -0.01,
+  graph     = FALSE,
+  cmprsk    = TRUE
+)
+
+# 2) Save plot
+png(
+  filename = "decision_curve_Model1_5yrs_stdca.png",
+  width  = 2000,
+  height = 1600,
+  res    = 300
+)
+
+oldpar <- par(
+  xaxs = "i",
+  yaxs = "i",
+  las  = 1,
+  mar  = c(6.1, 5.8, 4.1, 2.1),
+  mgp  = c(4.25, 1, 0)
+)
+
+nb <- dca_vdata$net.benefit
+
+# Y-limits: use the observed range (robust) so the full curve is visible
+yl <- c(-0.005, 0.005)
+plot(
+  nb$threshold,
+  nb$score_5yrs_KFREUK1,
+  type = "l",
+  lwd  = 2,
+  lty  = 1,
+  xlab = "",
+  ylab = "Net Benefit",
+  xlim = c(0, 0.5),
+  ylim = yl,
+  bty  = "n",
+  xaxt = "n"
+)
+
+lines(nb$threshold, nb$none, type = "l", lwd = 2, lty = 4, col = "black")
+lines(nb$threshold, nb$all,  type = "l", lwd = 2, col = "darkgray")
+
+legend(
+  "topright",
+  c("Treat all", "Treat none", "Prediction model"),
+  lwd = c(2, 2, 2),
+  lty = c(1, 4, 1),
+  col = c("darkgray", "black", "black"),
+  bty = "n"
+)
+
+# Primary x-axis: 0 to 1
+axis(1, at = seq(0, 1, by = 0.1))
+
+# Secondary x-axis: harm:benefit ratio (p_t : 1-p_t) for 0.1 to 0.9
+axis(
+  1,
+  pos = par("usr")[3] - 0.12 * diff(par("usr")[3:4]),  # place below plot area
+  at = c(0.1, 0.2, 0.3, 0.4, 0.5),
+  labels = c("1:9", "1:4", "3:7", "2:3", "1:1")
+)
+
+mtext("Threshold probability", 1, line = 2)
+mtext("Harm to benefit ratio", 1, line = 5)
+title("5 years")
+
+par(oldpar)
+dev.off()
+
+```
+
+
+
+#### Model 2
+
+```{r}
+
+# 1) Run stdca across all thresholds up to 1
+dca_vdata <- stdca(
+  data      = clinical_utility_data,
+  outcome   = "status1",
+  ttoutcome = "time1",
+  timepoint = 5,
+  predictors = "score_5yrs_KFREUK2",
+  xstop     = 0.5,      # evaluate thresholds up to 1.0
+  ymin      = -0.01,
+  graph     = FALSE,
+  cmprsk    = TRUE
+)
+
+# 2) Save plot
+png(
+  filename = "decision_curve_Model2_5yrs_stdca.png",
+  width  = 2000,
+  height = 1600,
+  res    = 300
+)
+
+oldpar <- par(
+  xaxs = "i",
+  yaxs = "i",
+  las  = 1,
+  mar  = c(6.1, 5.8, 4.1, 2.1),
+  mgp  = c(4.25, 1, 0)
+)
+
+nb <- dca_vdata$net.benefit
+
+# Y-limits: use the observed range (robust) so the full curve is visible
+yl <- c(-0.005, 0.005)
+plot(
+  nb$threshold,
+  nb$score_5yrs_KFREUK2,
+  type = "l",
+  lwd  = 2,
+  lty  = 1,
+  xlab = "",
+  ylab = "Net Benefit",
+  xlim = c(0, 0.5),
+  ylim = yl,
+  bty  = "n",
+  xaxt = "n"
+)
+
+lines(nb$threshold, nb$none, type = "l", lwd = 2, lty = 4, col = "black")
+lines(nb$threshold, nb$all,  type = "l", lwd = 2, col = "darkgray")
+
+legend(
+  "topright",
+  c("Treat all", "Treat none", "Prediction model"),
+  lwd = c(2, 2, 2),
+  lty = c(1, 4, 1),
+  col = c("darkgray", "black", "black"),
+  bty = "n"
+)
+
+# Primary x-axis: 0 to 1
+axis(1, at = seq(0, 1, by = 0.1))
+
+# Secondary x-axis: harm:benefit ratio (p_t : 1-p_t) for 0.1 to 0.9
+axis(
+  1,
+  pos = par("usr")[3] - 0.12 * diff(par("usr")[3:4]),  # place below plot area
+  at = c(0.1, 0.2, 0.3, 0.4, 0.5),
+  labels = c("1:9", "1:4", "3:7", "2:3", "1:1")
+)
+
+mtext("Threshold probability", 1, line = 2)
+mtext("Harm to benefit ratio", 1, line = 5)
+title("5 years")
+
+par(oldpar)
+dev.off()
+
+```
+
+#### Combine the three models
+
+```{r}
+# ------------------------------------------------------------
+# 2-year decision curve analysis (stdca) with 3 models on ONE plot
+# Benchmark vs Model 1 vs Model 2
+# Different colours + different line types
+# ------------------------------------------------------------
+
+# Run stdca once with all 3 predictors
+dca_vdata <- stdca(
+  data      = clinical_utility_data,
+  outcome   = "status1",
+  ttoutcome = "time1",
+  timepoint = 5,
+  predictors = c("score_5yrs_Benchmark", "score_5yrs_KFREUK1", "score_5yrs_KFREUK2"),
+  xstop     = 0.5,
+  ymin      = -0.01,
+  graph     = FALSE,
+  cmprsk    = TRUE
+)
+
+# Save plot
+png(
+  filename = "decision_curve_5yrs_all3models_stdca.png",
+  width  = 2000,
+  height = 1600,
+  res    = 300
+)
+
+oldpar <- par(
+  xaxs = "i",
+  yaxs = "i",
+  las  = 1,
+  mar  = c(6.1, 5.8, 4.1, 2.1),
+  mgp  = c(4.25, 1, 0)
+)
+
+nb <- dca_vdata$net.benefit
+
+# Robust y-limits across all curves
+yl <- c(-0.001, 0.006)
+
+# Styling for the 3 models
+model_cols <- c(
+  "score_5yrs_Benchmark" = "#1B9E77",
+  "score_5yrs_KFREUK1"   = "#7570B3",
+  "score_5yrs_KFREUK2"   = "#D95F02"
+)
+
+model_ltys <- c(
+  "score_5yrs_Benchmark" = 1,  # solid
+  "score_5yrs_KFREUK1"   = 2,  # dashed
+  "score_5yrs_KFREUK2"   = 3   # dotted
+)
+
+model_labs <- c(
+  "score_5yrs_Benchmark" = "Current KFRE",
+  "score_5yrs_KFREUK1"   = "KFRE UK",
+  "score_5yrs_KFREUK2"   = "KFRE UK Plus"
+)
+
+# Base plot: Benchmark
+plot(
+  nb$threshold,
+  nb$score_5yrs_Benchmark,
+  type = "l",
+  lwd  = 2,
+  lty  = model_ltys["score_5yrs_Benchmark"],
+  col  = model_cols["score_5yrs_Benchmark"],
+  xlab = "",
+  ylab = "Net Benefit",
+  xlim = c(0, 0.5),
+  ylim = yl,
+  bty  = "n",
+  xaxt = "n"
+)
+
+# Add Model 1 and Model 2
+lines(nb$threshold, nb$score_5yrs_KFREUK1, lwd = 2, lty = model_ltys["score_5yrs_KFREUK1"], col = model_cols["score_5yrs_KFREUK1"])
+lines(nb$threshold, nb$score_5yrs_KFREUK2, lwd = 2, lty = model_ltys["score_5yrs_KFREUK2"], col = model_cols["score_5yrs_KFREUK2"])
+
+# Treat none / treat all
+lines(nb$threshold, nb$none, lwd = 2, lty = 4, col = "black")
+lines(nb$threshold, nb$all,  lwd = 2, lty = 1, col = "darkgray")
+
+# Legend
+legend(
+  "topright",
+  legend = c("Treat all", "Treat none", unname(model_labs)),
+  col    = c("darkgray", "black", unname(model_cols)),
+  lwd    = c(2, 2, rep(2, 3)),
+  lty    = c(1, 4, unname(model_ltys)),
+  bty    = "n"
+)
+
+# Primary x-axis: 0 to 1
+axis(1, at = seq(0, 1, by = 0.1))
+
+# Secondary x-axis: harm:benefit ratio for 0.1 to 0.9
+axis(
+  1,
+  pos = par("usr")[3] - 0.12 * diff(par("usr")[3:4]),
+  at = c(0.1, 0.2, 0.3, 0.4, 0.5),
+  labels = c("1:9", "1:4", "3:7", "2:3", "1:1")
+)
+
+mtext("Threshold probability", 1, line = 2)
+mtext("Harm to benefit ratio", 1, line = 5)
+title("5 years")
+
+par(oldpar)
+dev.off()
+
+```
+
+
+#### Combine the three models - Version 2
+
+```{r}
+# ------------------------------------------------------------
+# 2-year decision curve analysis (stdca) with 3 models on ONE plot
+# Benchmark vs Model 1 vs Model 2
+# Different colours + different line types
+# ------------------------------------------------------------
+
+# Run stdca once with all 3 predictors
+dca_vdata <- stdca(
+  data      = clinical_utility_data,
+  outcome   = "status1",
+  ttoutcome = "time1",
+  timepoint = 5,
+  predictors = c("score_5yrs_Benchmark", "score_5yrs_KFREUK1", "score_5yrs_KFREUK2"),
+  xstop     = 0.2,
+  ymin      = -0.01,
+  graph     = FALSE,
+  cmprsk    = TRUE
+)
+
+# Save plot
+png(
+  filename = "decision_curve_5yrs_all3models_stdca_V2.png",
+  width  = 2000,
+  height = 1600,
+  res    = 300
+)
+
+oldpar <- par(
+  xaxs = "i",
+  yaxs = "i",
+  las  = 1,
+  mar  = c(6.1, 5.8, 4.1, 2.1),
+  mgp  = c(4.25, 1, 0)
+)
+
+nb <- dca_vdata$net.benefit
+
+
+# Robust y-limits across all curves
+yl <- c(-0.001, 0.006)
+
+# Styling for the 3 models
+model_cols <- c(
+  "score_5yrs_Benchmark" = "#1B9E77",
+  "score_5yrs_KFREUK1"   = "#7570B3",
+  "score_5yrs_KFREUK2"   = "#D95F02"
+)
+
+model_ltys <- c(
+  "score_5yrs_Benchmark" = 1,  # solid
+  "score_5yrs_KFREUK1"   = 2,  # dashed
+  "score_5yrs_KFREUK2"   = 3   # dotted
+)
+
+model_labs <- c(
+  "score_5yrs_Benchmark" = "Current KFRE",
+  "score_5yrs_KFREUK1"   = "KFRE UK",
+  "score_5yrs_KFREUK2"   = "KFRE UK Plus"
+)
+
+# Base plot: Benchmark
+plot(
+  nb$threshold,
+  nb$score_5yrs_Benchmark,
+  type = "l",
+  lwd  = 2,
+  lty  = model_ltys["score_5yrs_Benchmark"],
+  col  = model_cols["score_5yrs_Benchmark"],
+  xlab = "",
+  ylab = "Net Benefit",
+  xlim = c(0, 0.2),
+  ylim = yl,
+  bty  = "n",
+  xaxt = "n"
+)
+
+# Add Model 1 and Model 2
+lines(nb$threshold, nb$score_5yrs_KFREUK1, lwd = 2, lty = model_ltys["score_5yrs_KFREUK1"], col = model_cols["score_5yrs_KFREUK1"])
+lines(nb$threshold, nb$score_5yrs_KFREUK2, lwd = 2, lty = model_ltys["score_5yrs_KFREUK2"], col = model_cols["score_5yrs_KFREUK2"])
+
+# Treat none / treat all
+lines(nb$threshold, nb$none, lwd = 2, lty = 4, col = "black")
+lines(nb$threshold, nb$all,  lwd = 2, lty = 1, col = "darkgray")
+
+# Legend
+legend(
+  "topright",
+  legend = c("Treat all", "Treat none", unname(model_labs)),
+  col    = c("darkgray", "black", unname(model_cols)),
+  lwd    = c(2, 2, rep(2, 3)),
+  lty    = c(1, 4, unname(model_ltys)),
+  bty    = "n"
+)
+
+# Primary x-axis: 0 to 1
+axis(1, at = seq(0, 0.2, by = 0.05))
+
+# Secondary x-axis: harm:benefit ratio for 0.1 to 0.9
+axis(
+  1,
+  pos = par("usr")[3] - 0.12 * diff(par("usr")[3:4]),
+  at = c(0.05, 0.1, 0.15, 0.2),
+  labels = c("1:19", "1:9", "3:17", "1:4")
+)
+
+mtext("Threshold probability", 1, line = 2)
+mtext("Harm to benefit ratio", 1, line = 5)
+title("5 years")
+
+par(oldpar)
+dev.off()
+
+
+nb = data.frame(nb)
+write.csv(nb,"NetBenefit5years.csv")
+
+```
+
+
+
+
+
+
+
+
