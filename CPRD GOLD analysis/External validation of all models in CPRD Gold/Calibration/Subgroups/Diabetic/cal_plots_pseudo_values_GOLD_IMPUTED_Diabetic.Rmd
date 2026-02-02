@@ -41,7 +41,7 @@ library(readstata13)
 ## 1. Benchmark model
 
 ```{r}
-benchmark = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/GOLD data September 2024/Benchmark models/Linked data/gold_imputed_data_ready_for_validation.rds")
+benchmark = readRDS("gold_imputed_data_ready_for_validation.rds")
 
 benchmark = subset(benchmark,benchmark$diabetic==1)
 
