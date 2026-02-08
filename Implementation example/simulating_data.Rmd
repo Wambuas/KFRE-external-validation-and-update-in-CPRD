@@ -1,0 +1,132 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+
+# ------------------------------------------------------------
+# Synthetic KFRE demonstration dataset (n = 1000)
+# CKD stage 3–5 population; competing risks outcome
+# Variables: ACR, eGFR (<60), age, sex, diabetes, ethnicity, time, status (0/1/2)
+#
+# Follow-up:
+#  - 
+#    reflect typical follow-up lengths reported in UK primary-care KFRE studies
+#    (e.g., median follow-up ~4.7 years with upper IQR ~6.6 years).
+#
+# Event-time model is purely synthetic and calibrated for demonstration.
+# ------------------------------------------------------------
+
+set.seed(2028)
+
+n <- 1000
+
+# ---- Helper: truncated normal sampler ----
+rtruncnorm <- function(n, mean, sd, low, high) {
+  out <- numeric(0)
+  while (length(out) < n) {
+    x <- rnorm(n * 3, mean, sd)
+    x <- x[x >= low & x <= high]
+    out <- c(out, x)
+  }
+  out[1:n]
+}
+
+# ---- Covariate generation ----
+# Sex distribution approximating UK population (~49% male, 51% female)
+male <- rbinom(n, 1, 0.49)
+
+# Age distribution (years): Normal with truncation (illustrative; older CKD cohort)
+age_years <- rtruncnorm(n, mean = 75.9, sd = 10.6, low = 18, high = 95)
+
+# eGFR distribution (ml/min/1.73m^2): truncated to CKD stage 3–5 range (<60)
+eGFR <- rtruncnorm(n, mean = 48.2, sd = 9.8, low = 15, high = 59.9)
+
+# ACR distribution (mg/mmol): log-normal calibrated to median 3.2 and IQR 1.2–8.0
+z <- qnorm(0.75) # 0.6744898
+mu <- log(3.2)
+sigma <- (log(8.0) - log(1.2)) / (2 * z)
+ACR <- rlnorm(n, meanlog = mu, sdlog = sigma)
+ACR <- pmin(pmax(ACR, 0.1), 300) # cap extreme tail for presentation
+
+# Diabetes prevalence in CKD stage 3–5 (CPRD-based typical range ~30–35%); use 32%
+diabetes_status <- rbinom(n, 1, 0.32)
+
+# Ethnicity distribution (England & Wales Census 2021 high-level groups) + 2% Unknown
+eth_levels <- c("White", "Asian", "Black", "Mixed", "Other", "Unknown")
+eth_probs_base <- c(81.7, 9.3, 4.0, 2.9, 2.1)
+unknown_pct <- 2
+eth_probs <- c(eth_probs_base * (1 - unknown_pct/100), unknown_pct)
+eth_probs <- eth_probs / sum(eth_probs)
+ethnicity <- sample(eth_levels, size = n, replace = TRUE, prob = eth_probs)
+
+# ---- Outcome generation: competing risks ----
+# Status coding:
+#   0 = censored
+#   1 = kidney failure
+#   2 = death without kidney failure
+#
+# Kidney failure time is generated from a Weibull proportional hazards model
+# with baseline cumulative hazard H0(t) = (t/alpha)^k (shape k > 1 so hazard
+# increases over time), calibrated for demonstration.
+#
+# Death time is generated from an exponential model with modest covariate effects.
+
+alpha <- 3.27
+k_shape <- 2.05
+death_rate <- 0.005
+
+# Administrative censoring time (years): allows follow-up beyond 5 years
+admin_censor <- 7
+
+# Linear predictor for kidney failure (illustrative coefficients)
+lp1 <- 0.03 * (age_years - 75) +
+  0.6 * diabetes_status +
+  0.5 * log(ACR) +
+  (-0.05) * (eGFR - 45) +
+  0.15 * male
+lp1c <- lp1 - mean(lp1)
+
+# Linear predictor for death (modest covariate effects)
+lp2 <- 0.06 * (age_years - 75) +
+  0.10 * male +
+  0.10 * diabetes_status
+lp2c <- lp2 - mean(lp2)
+
+# Draw kidney failure time (Weibull PH inversion)
+E1 <- rexp(n, rate = 1)
+T1 <- alpha * (E1 / exp(lp1c))^(1 / k_shape)
+
+# Draw death time (exponential with rate scaled by exp(lp2))
+rate2 <- death_rate * exp(lp2c)
+T2 <- rexp(n, rate = rate2)
+
+# Observed time and status under competing risks + administrative censoring
+time <- pmin(T1, T2, admin_censor)
+status <- ifelse(T1 < T2 & T1 <= admin_censor, 1,
+                 ifelse(T2 < T1 & T2 <= admin_censor, 2, 0))
+status <- as.integer(status)
+
+# ---- Assemble dataset ----
+demo <- data.frame(
+  id = seq_len(n),
+  ACR_mg_mmol = round(ACR, 2),
+  eGFR_ml_min_1.73m2 = round(eGFR, 1),
+  age_years = round(age_years, 1),
+  male = as.integer(male),
+  diabetes_status = as.integer(diabetes_status),
+  ethnicity = ethnicity,
+  time = round(time, 3),
+  status = status
+)
+
+# Write to CSV
+write.csv(demo, file = "example_simulated_data.csv", row.names = FALSE)
+
+
+```
+
+
