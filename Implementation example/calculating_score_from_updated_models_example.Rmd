@@ -4,65 +4,13 @@ output: html_notebook
 ---
 
 
+## Import R libraries
+
 ```{r}
 
 rm(list = ls())
 
 library(tidyverse)
-library(riskRegression)
-library(plyr)
-#library(tidysurv)
-library(data.table)
-library(stringr)
-library(parallel)
-library(tableone)
-library(muhaz)
-library(survival)
-library(Hmisc)
-library(MASS)
-library(mfp)
-library(reshape2)
-library(flexsurv)
-library(devtools)
-library(prodlim)
-library(rms)
-library(rstpm2)
-library(survcomp)
-library(glmnet)
-library(caret)
-library(sjPlot)
-library(knitr)
-library(webshot)
-library(pROC)
-library(rmda)
-library(pseudo)
-library(lava)
-library(pec)
-library(mice)
-library(miceadds)
-library(haven)
-library(foreign)
-
-
-pacman::p_load(
-  survival,
-  rms,
-  mstate,
-  pseudo,
-  pec,
-  riskRegression,
-  plotrix,
-  knitr,
-  splines,
-  kableExtra,
-  gtsummary,
-  boot,
-  tidyverse,
-  rsample,
-  gridExtra,
-  webshot,
-  riskRegression
-)
 
 ```
 
@@ -119,27 +67,25 @@ example_data = example_data %>% dplyr::mutate(
 
 ```{r}
 
-kfre_uk_model = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/2026/model_info_updated_kfre_only.rds")
+kfre_uk_model = readRDS("/Stored updated models/model_info_updated_kfre_only.rds")
 
 ```
 
 
 ### Calculating the risk score
 
-#### Define function (from https://github.com/survival-lumc/ValidationCompRisks/blob/main/sharing_CSC_model.R)
+#### Define function (adapted from https://github.com/survival-lumc/ValidationCompRisks/blob/main/sharing_CSC_model.R)
 
 ```{r}
 
 predictRisk_shared_CSC <- function(model_info, newdata, horizon, primary_event) {
 
-  # ---- local helper (only RHS, no Surv re-evaluation)
   mm_rhs <- function(terms_obj, data) {
-    tt <- stats::delete.response(terms_obj) # drop Surv(...) from terms
+    tt <- stats::delete.response(terms_obj)
     mf <- stats::model.frame(tt, data = data, na.action = stats::na.pass)
     stats::model.matrix(tt, data = mf)
   }
 
-  # ---- checks
   info_names <- c("coefficients", "baseline_hazards", "model_terms")
   if (any(!(names(model_info) %in% info_names))) {
     stop(paste0("Names of model_info components should be: ",
@@ -155,7 +101,7 @@ predictRisk_shared_CSC <- function(model_info, newdata, horizon, primary_event) 
 
   causes_ind <- seq_len(n_causes)
 
-  # ---- linear predictors for all causes (aligned to nrow(newdata))
+  # ---- linear predictors for all causes
   linpreds <- lapply(causes_ind, function(cause) {
     mm <- mm_rhs(model_info$model_terms[[cause]], newdata)
     as.numeric(mm[, -1, drop = FALSE] %*% model_info$coefficients[[cause]])
@@ -169,7 +115,6 @@ predictRisk_shared_CSC <- function(model_info, newdata, horizon, primary_event) 
   # ---- absolute risks
   preds <- vapply(seq_len(nrow(newdata)), function(id) {
 
-    # if missing covariates for any cause -> return NA (change policy if you prefer)
     if (any(vapply(causes_ind, function(cause) is.na(linpreds[[cause]][id]), logical(1L)))) {
       return(NA_real_)
     }
@@ -190,6 +135,7 @@ predictRisk_shared_CSC <- function(model_info, newdata, horizon, primary_event) 
 
   preds
 }
+
 
 ```
 
@@ -232,7 +178,7 @@ example_data$score_5yrs_KFREUK <- predictRisk_shared_CSC(
 
 ```{r}
 
-kfre_uk_plus_model = readRDS("/rds/projects/s/subramaa-mum-predict/SteveW/KFRE/Final dataset/Updated data October/15 months ACR Imputed/October 2024/Updated models/2026/model_info_updated_kfre_plus.rds")
+kfre_uk_plus_model = readRDS("/Stored updated models/model_info_updated_kfre_plus.rds")
 
 ```
 
