@@ -647,7 +647,6 @@ kfre_only_model = readRDS("model_info_updated_kfre_only.rds")
 kfre_only_full_model = readRDS("model_full_updated_kfre_only.rds")
 
 
-
 kfre_uk1 = kfre_uk1 %>% dplyr::mutate(
 
   male=ifelse(female== 0, 1, 0),
@@ -685,6 +684,112 @@ kfre_uk1 = kfre_uk1 %>% dplyr::select(
 x = kfre_uk1
 
 ```
+
+
+
+#### Calculating the risk scores using the KFREUK1 model - using saved model infomation file
+
+```{r}
+
+predictRisk_shared_CSC <- function(model_info, newdata, horizon, primary_event) {
+
+  mm_rhs <- function(terms_obj, data) {
+    tt <- stats::delete.response(terms_obj)
+    mf <- stats::model.frame(tt, data = data, na.action = stats::na.pass)
+    stats::model.matrix(tt, data = mf)
+  }
+
+  info_names <- c("coefficients", "baseline_hazards", "model_terms")
+  if (any(!(names(model_info) %in% info_names))) {
+    stop(paste0("Names of model_info components should be: ",
+                paste(info_names, collapse = ", ")))
+  }
+
+  n_causes <- unique(vapply(model_info, length, FUN.VALUE = integer(1L)))
+  if (length(n_causes) > 1) stop("Elements of model_info must all have length = number of causes.")
+  if (!(primary_event %in% seq_len(n_causes))) stop("primary_event out of range.")
+  if (!is.numeric(horizon) || length(horizon) != 1L || is.na(horizon) || horizon < 0) {
+    stop("horizon must be a single non-missing number >= 0")
+  }
+
+  causes_ind <- seq_len(n_causes)
+
+  # ---- linear predictors for all causes
+  linpreds <- lapply(causes_ind, function(cause) {
+    mm <- mm_rhs(model_info$model_terms[[cause]], newdata)
+    as.numeric(mm[, -1, drop = FALSE] %*% model_info$coefficients[[cause]])
+  })
+
+  # ---- baseline time grid for horizon indexing
+  time_points <- model_info$baseline_hazards[[primary_event]][["time"]]
+  if (is.null(time_points) || !length(time_points)) stop("No time grid found in baseline_hazards for primary_event.")
+  idx_h <- max(which(time_points <= horizon), 0L)
+
+  # ---- absolute risks
+  preds <- vapply(seq_len(nrow(newdata)), function(id) {
+
+    if (any(vapply(causes_ind, function(cause) is.na(linpreds[[cause]][id]), logical(1L)))) {
+      return(NA_real_)
+    }
+
+    hazards <- vapply(causes_ind, function(cause) {
+      bh <- model_info$baseline_hazards[[cause]][["hazard"]]
+      if (length(bh) != length(time_points)) stop("Baseline hazard length mismatch across causes.")
+      cumhaz <- bh * exp(linpreds[[cause]][id])
+      diff(c(0, cumhaz))
+    }, FUN.VALUE = numeric(length(time_points)))
+
+    surv <- cumprod(1 - rowSums(hazards))
+    cuminc <- cumsum(hazards[, primary_event] * c(1, surv[-length(surv)]))
+
+    if (idx_h == 0L) 0 else cuminc[idx_h]
+
+  }, FUN.VALUE = numeric(1L))
+
+  preds
+}
+
+
+horiz = 2
+cause_interest = 1
+
+kfre_uk1$status = kfre_uk1$status1
+kfre_uk1$time = kfre_uk1$time1
+
+
+kfre_uk1$score_2yrs_KFREUK1_v2 <- predictRisk_shared_CSC(
+  kfre_only_model,
+  newdata = kfre_uk1,
+  horizon = horiz, 
+  primary_event = cause_interest)
+
+
+horiz = 5
+cause_interest = 1
+
+
+kfre_uk1$score_5yrs_KFREUK1_v2 <- predictRisk_shared_CSC(
+  kfre_only_model,
+  newdata = kfre_uk1,
+  horizon = horiz, 
+  primary_event = cause_interest)
+
+
+```
+
+
+
+
+
+```{r}
+all.equal(kfre_uk1$score_2yrs_KFREUK1, kfre_uk1$score_2yrs_KFREUK1_v2)
+```
+
+
+```{r}
+all.equal(kfre_uk1$score_5yrs_KFREUK1, kfre_uk1$score_5yrs_KFREUK1_v2)
+```
+
 
 ##### 2 years
 
