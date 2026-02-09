@@ -1,0 +1,37 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+## Import R libraries
+
+```{r}
+
+rm(list = ls())
+
+library(tidyverse)
+
+```
+
+
+
+## KFRE-UK
+
+### Importing KFRE-UK model
+
+```{r}
+
+kfre_uk_model = readRDS("/Stored updated models/model_info_updated_kfre_only.rds")
+
+```
+
+
+### KFRE-UK-Plus
+
+```{r}
+
+kfre_uk_plus_model = readRDS("/Stored updated models/model_info_updated_kfre_plus.rds")
+
+```
